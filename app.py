@@ -13,8 +13,16 @@ SPREADSHEET_ID = "1NOLL3GNkIzBIYHIEwV6D55kJ6vsixkSBFj0LVjuTkvI"
 KPI_CONFIG_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=KPI"
 ACCOUNT_AC_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=KPI%20checking%20portal%20AC"
 
-@st.cache_data(ttl=15)
-def load_csv_from_google_sheets(url):
+# 不加缓存，确保每次刷新或登录都实时从 Google Sheets 读取最新的账号和密码
+def load_users_realtime(url):
+    try:
+        df = pd.read_csv(url, dtype=str) # 强制全部按字符串读取，避免密码变成数字导致匹配出错
+        df.columns = [str(c).strip() for c in df.columns]
+        return df
+    except Exception as e:
+        return None
+
+def load_config_data(url):
     try:
         df = pd.read_csv(url)
         df.columns = [str(c).strip() for c in df.columns]
@@ -27,9 +35,9 @@ st.title("📊 NJ7 Warehouse Performance Portal")
 st.caption("Note: Read-only access to individual performance metrics. Updated daily.")
 st.markdown("---")
 
-# 1. 加载账号表与配置表
-users_df = load_csv_from_google_sheets(ACCOUNT_AC_URL)
-config_df = load_csv_from_google_sheets(KPI_CONFIG_URL)
+# 1. 实时加载账号表与配置表
+users_df = load_users_realtime(ACCOUNT_AC_URL)
+config_df = load_config_data(KPI_CONFIG_URL)
 
 if users_df is not None and config_df is not None:
     st.sidebar.header("🔐 Employee Login")
@@ -51,9 +59,10 @@ if users_df is not None and config_df is not None:
     input_pw = st.sidebar.text_input("Password / 密码", type="password", value="").strip()
 
     if input_name and input_pw:
+        # 实时匹配姓名和密码（统一转为小写和字符串进行比对）
         user_match = users_df[
-            (users_df["name"].astype(str).str.strip().str.lower() == input_name.lower()) & 
-            (users_df["pw"].astype(str).str.strip() == input_pw)
+            (users_df["name"].fillna("").astype(str).str.strip().str.lower() == input_name.lower()) & 
+            (users_df["pw"].fillna("").astype(str).str.strip() == input_pw)
         ]
         
         if not user_match.empty:
@@ -62,7 +71,6 @@ if users_df is not None and config_df is not None:
             st.sidebar.success(f"Welcome, {input_name}! Role: {user_role}")
             
             if raw_link_val and raw_link_val != "nan":
-                # 将 Google Drive 的分享链接转换为直接下载链接
                 target_url = raw_link_val
                 if "drive.google.com" in target_url:
                     if "/file/d/" in target_url:
