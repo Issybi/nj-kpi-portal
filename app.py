@@ -176,21 +176,25 @@ if users_df is not None and config_df is not None:
                     matches = [s for s in sheet_names if kw.lower() in s.lower()]
                     return matches[0] if matches else None
 
-                def find_sheet_by_exact(prefix):
+                def find_driver_sheet(prefix):
+                    """专门智能匹配 Driver 的专属分页（支持 'picking - 名字'、'picking-名字' 等带有各种空格的分页）"""
                     for s in sheet_names:
-                        s_lower = s.lower()
-                        if prefix.lower() in s_lower:
+                        s_clean = s.lower().replace(" ", "").replace("-", "")
+                        prefix_clean = prefix.lower().replace(" ", "").replace("-", "")
+                        if prefix_clean in s_clean:
                             for name in allowed_names:
-                                if name in s_lower:
+                                name_clean = name.lower().replace(" ", "")
+                                if name_clean in s_clean:
                                     return s
                     return None
 
                 def find_scan_sheet():
                     for s in sheet_names:
-                        s_lower = s.lower()
-                        if "scan" in s_lower:
+                        s_clean = s.lower().replace(" ", "").replace("-", "")
+                        if "scan" in s_clean:
                             for name in allowed_names:
-                                if name in s_lower:
+                                name_clean = name.lower().replace(" ", "")
+                                if name_clean in s_clean:
                                     return s
                     return None
 
@@ -232,18 +236,16 @@ if users_df is not None and config_df is not None:
                         "5. Putaway"
                     ])
 
-                    # --- Tab 1: Summary (双保险解析，防止表头不匹配导致空白) ---
+                    # --- Tab 1: Summary ---
                     with tab_summary:
                         st.markdown("### Summary (个人绩效摘要)")
                         sum_sheet = find_sheet("summary") or sheet_names[0]
                         df_sum = pd.DataFrame()
                         try:
-                            # 尝试带 header=6 解析
                             df_sum = excel_file.parse(sum_sheet, header=6)
                             df_sum.columns = [str(c).strip() for c in df_sum.columns]
                             filtered_sum = filter_by_allowed_names(df_sum)
                             if filtered_sum.empty:
-                                # 如果 header=6 过滤不到，换默认表头再试一次
                                 df_sum = excel_file.parse(sum_sheet)
                                 df_sum.columns = [str(c).strip() for c in df_sum.columns]
                         except Exception:
@@ -254,9 +256,7 @@ if users_df is not None and config_df is not None:
                         if not filtered_sum.empty:
                             st.dataframe(filtered_sum, use_container_width=True)
                         else:
-                            # 如果还是过滤不出来，把整个 Summary 表展现出来以便核对
-                            st.info("未在 Summary 中直接精准匹配到名字，为您展示当前 Summary 表：")
-                            st.dataframe(df_sum, use_container_width=True)
+                            st.info("No summary record found.")
 
                     # --- Tab 2: Error-OtherTasks ---
                     with tab_error:
@@ -280,4 +280,38 @@ if users_df is not None and config_df is not None:
                         if bonus_sheet:
                             df_bonus = excel_file.parse(bonus_sheet)
                             df_bonus.columns = [str(c).strip() for c in df_bonus.columns]
-                            filtered_bonus = filter_col_b_by_allowed_names(df
+                            filtered_bonus = filter_col_b_by_allowed_names(df_bonus)
+                            if not filtered_bonus.empty:
+                                st.dataframe(filtered_bonus, use_container_width=True)
+                            else:
+                                st.info("No bonus records found. (No bonus)")
+                        else:
+                            st.info("No bonus records found. (No bonus)")
+
+                    # --- Tab 4: Picking ---
+                    with tab_picking:
+                        st.markdown(f"### Picking Records ({standard_name})")
+                        pick_sheet_name = find_driver_sheet("picking")
+                        if pick_sheet_name:
+                            df_pick = excel_file.parse(pick_sheet_name)
+                            df_pick.columns = [str(c).strip() for c in df_pick.columns]
+                            st.dataframe(df_pick, use_container_width=True)
+                        else:
+                            st.warning("未找到专属的 Picking 绩效分页。")
+
+                    # --- Tab 5: Putaway ---
+                    with tab_putaway:
+                        st.markdown(f"### Putaway Records ({standard_name})")
+                        put_sheet_name = find_driver_sheet("putaway")
+                        if put_sheet_name:
+                            df_put = excel_file.parse(put_sheet_name)
+                            df_put.columns = [str(c).strip() for c in df_put.columns]
+                            st.dataframe(df_put, use_container_width=True)
+                        else:
+                            st.warning("未找到专属的 Putaway 绩效分页。")
+            else:
+                st.error(f"无法下载或解析 {selected_month} 的数据文件。")
+        else:
+            st.warning(f"未找到 **{selected_month}** 的有效下载链接，请检查后台配置表 `KPI` 中的 C 列链接。")
+else:
+    st.error("无法加载后台配置表。")
