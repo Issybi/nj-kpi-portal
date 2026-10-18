@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import time
+import requests
+import io
 
 # 页面基本设置
 st.set_page_config(
@@ -21,19 +23,52 @@ def load_users_realtime(spreadsheet_id):
     except Exception as e:
         return None
 
+@st.cache_data(ttl=10)
+def load_config_data(spreadsheet_id):
+    try:
+        url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv&sheet=KPI"
+        df = pd.read_csv(url)
+        df.columns = [str(c).strip() for c in df.columns]
+        return df
+    except Exception as e:
+        return None
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_info = None
 
 st.title("📊 NJ7 Warehouse Performance Portal")
-st.caption("Note: Read-only access to individual performance metrics.")
+st.caption("Note: Read-only access to individual performance metrics. Auto-synced from Google Drive.")
 st.markdown("---")
 
 users_df = load_users_realtime(SPREADSHEET_ID)
+config_df = load_config_data(SPREADSHEET_ID)
 
-if users_df is not None:
-    st.sidebar.header("🔐 Employee Portal & Upload")
+if users_df is not None and config_df is not None:
+    st.sidebar.header("🔐 Employee Portal")
     
+    # 月份选择
+    valid_config = config_df.dropna(subset=["Month_Label"])
+    months = valid_config["Month_Label"].tolist()
+    selected_month = st.sidebar.selectbox("Select Month / 选择月份", months)
+    
+    # 获取对应月份在后台配置表里的直链（优先读 C 列，没有则按名字找）
+    row = valid_config[valid_config["Month_Label"] == selected_month]
+    link_val = ""
+    if not row.empty:
+        cols = config_df.columns
+        if len(cols) > 2:
+            val_c = str(row.iloc[0, 2]).strip()
+            if "http" in val_c:
+                link_val = val_c
+        if not link_val:
+            link_cols = [c for c in cols if any(k in c.lower() for k in ["link", "url", "file", "direct"])]
+            for c in link_cols:
+                v = str(row[c].values[0]).strip()
+                if "http" in v:
+                    link_val = v
+                    break
+
     if not st.session_state.logged_in:
         with st.sidebar.form("login_form"):
             st.subheader("Login / 登录")
@@ -75,153 +110,166 @@ if users_df is not None:
             st.session_state.user_info = None
             st.rerun()
 
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📂 Upload KPI Excel File")
-    uploaded_file = st.sidebar.file_uploader("请上传对应月份的原始 KPI Excel 文件 (.xlsx)", type=["xlsx", "xls"])
+        # 🚀 核心自动化：自动从网盘下载文件并加载
+        if link_val and link_val != "nan":
+            target_url = link_val
+            if "drive.google.com" in target_url and "export=download" not in target_url:
+                if "/file/d/" in target_url:
+                    file_id = target_url.split("/file/d/")[1].split("/")[0]
+                    target_url = f"https://docs.google.com/uc?export=download&id={file_id}"
+            
+            with st.spinner(f"正在自动加载 {selected_month} 的网盘 KPI 数据..."):
+                try:
+                    res = requests.get(target_url)
+                    excel_file = pd.ExcelFile(io.BytesIO(res.content))
+                    sheet_names = excel_file.sheet_names
+                except Exception as e:
+                    excel_file = None
+                    sheet_names = []
 
-    if uploaded_file is not None:
-        try:
-            excel_file = pd.ExcelFile(uploaded_file)
-            sheet_names = excel_file.sheet_names
-        except Exception as e:
-            excel_file = None
-            sheet_names = []
+            if excel_file is not None:
+                employee_names = [
+                    str(user_info.get(c, "")).strip().lower() 
+                    for c in ["name", "name2", "name3"] 
+                    if pd.notna(user_info.get(c)) and str(user_info.get(c)).strip() != ""
+                ]
+                if input_name.lower() not in employee_names:
+                    employee_names.append(input_name.lower())
 
-        if excel_file is not None and st.session_state.logged_in:
-            employee_names = [
-                str(user_info.get(c, "")).strip().lower() 
-                for c in ["name", "name2", "name3"] 
-                if pd.notna(user_info.get(c)) and str(user_info.get(c)).strip() != ""
-            ]
-            if input_name.lower() not in employee_names:
-                employee_names.append(input_name.lower())
+                def smart_filter_df(df):
+                    if df is None or df.empty:
+                        return pd.DataFrame()
+                    mask = pd.Series(False, index=df.index)
+                    for col in df.columns:
+                        col_series = df[col].fillna("").astype(str).str.strip().str.lower()
+                        for name in employee_names:
+                            mask = mask | col_series.str.contains(name, na=False)
+                    return df[mask]
 
-            def smart_filter_df(df):
-                """精准过滤包含员工姓名的行"""
-                if df is None or df.empty:
-                    return pd.DataFrame()
-                mask = pd.Series(False, index=df.index)
-                for col in df.columns:
-                    col_series = df[col].fillna("").astype(str).str.strip().str.lower()
+                def filter_by_col_b(df):
+                    if df is None or df.empty:
+                        return pd.DataFrame()
+                    if len(df.columns) < 2:
+                        return pd.DataFrame()
+                    col_b_name = df.columns[1]
+                    col_b_series = df[col_b_name].fillna("").astype(str).str.strip().str.lower()
+                    mask = pd.Series(False, index=df.index)
                     for name in employee_names:
-                        mask = mask | col_series.str.contains(name, na=False)
-                return df[mask]
+                        mask = mask | col_b_series.str.contains(name, na=False)
+                    return df[mask]
 
-            def find_sheet(kw):
-                matches = [s for s in sheet_names if kw.lower() in s.lower()]
-                return matches[0] if matches else None
+                def find_sheet(kw):
+                    matches = [s for s in sheet_names if kw.lower() in s.lower()]
+                    return matches[0] if matches else None
 
-            # ==========================
-            # 1. SCANNER 岗位逻辑
-            # ==========================
-            if user_role == "scanner":
-                st.subheader(f"📋 Scanner Performance - {input_name}")
-                target_scan_sheet = find_sheet("scan") or sheet_names[0]
-                df_scan = excel_file.parse(target_scan_sheet)
-                df_scan.columns = [str(c).strip() for c in df_scan.columns]
-                
-                filtered_scan = smart_filter_df(df_scan)
-                if not filtered_scan.empty:
-                    st.dataframe(filtered_scan, use_container_width=True)
-                else:
-                    st.dataframe(df_scan, use_container_width=True)
+                def find_sheet_by_exact_or_partial_name(prefix, name):
+                    for s in sheet_names:
+                        s_lower = s.lower()
+                        if prefix.lower() in s_lower and name.lower() in s_lower:
+                            return s
+                    for s in sheet_names:
+                        if prefix.lower() in s.lower():
+                            return s
+                    return None
 
-            # ==========================
-            # 2. DRIVER 岗位逻辑 (5个分页)
-            # ==========================
-            else:
-                st.subheader(f"🚚 Driver Performance Portal - {input_name}")
-                
-                tab_summary, tab_error, tab_bonus, tab_picking, tab_putaway = st.tabs([
-                    "1. Summary", 
-                    "2. Error-OtherTasks", 
-                    "3. Bonus", 
-                    "4. Picking", 
-                    "5. Putaway"
-                ])
-
-                # --- Tab 1: Summary ---
-                with tab_summary:
-                    st.markdown("### Summary (个人绩效摘要)")
-                    sum_sheet = find_sheet("summary") or sheet_names[0]
-                    try:
-                        df_sum = excel_file.parse(sum_sheet, header=6) # 适配第7行表头
-                    except Exception:
-                        df_sum = excel_file.parse(sum_sheet)
-                    df_sum.columns = [str(c).strip() for c in df_sum.columns]
-                    filtered_sum = smart_filter_df(df_sum)
-                    if not filtered_sum.empty:
-                        st.dataframe(filtered_sum, use_container_width=True)
+                # ==========================
+                # 1. SCANNER 岗位逻辑
+                # ==========================
+                if user_role == "scanner":
+                    st.subheader(f"📋 Scanner Performance ({selected_month}) - {input_name}")
+                    target_scan_sheet = find_sheet("scan") or sheet_names[0]
+                    df_scan = excel_file.parse(target_scan_sheet)
+                    df_scan.columns = [str(c).strip() for c in df_scan.columns]
+                    
+                    filtered_scan = smart_filter_df(df_scan)
+                    if not filtered_scan.empty:
+                        st.dataframe(filtered_scan, use_container_width=True)
                     else:
-                        st.info("No summary record found for this employee.")
+                        st.dataframe(df_scan, use_container_width=True)
 
-                # --- Tab 2: Error-OtherTasks ---
-                with tab_error:
-                    st.markdown("### Error & Other Tasks")
-                    err_sheet = find_sheet("error") or find_sheet("other")
-                    if err_sheet:
-                        df_err = excel_file.parse(err_sheet)
-                        df_err.columns = [str(c).strip() for c in df_err.columns]
-                        filtered_err = smart_filter_df(df_err)
-                        if not filtered_err.empty:
-                            st.dataframe(filtered_err, use_container_width=True)
+                # ==========================
+                # 2. DRIVER 岗位逻辑 (5个分页)
+                # ==========================
+                else:
+                    st.subheader(f"🚚 Driver Performance Portal ({selected_month}) - {input_name}")
+                    
+                    tab_summary, tab_error, tab_bonus, tab_picking, tab_putaway = st.tabs([
+                        "1. Summary", 
+                        "2. Error-OtherTasks", 
+                        "3. Bonus", 
+                        "4. Picking", 
+                        "5. Putaway"
+                    ])
+
+                    # --- Tab 1: Summary ---
+                    with tab_summary:
+                        st.markdown("### Summary (个人绩效摘要)")
+                        sum_sheet = find_sheet("summary") or sheet_names[0]
+                        try:
+                            df_sum = excel_file.parse(sum_sheet, header=6)
+                        except Exception:
+                            df_sum = excel_file.parse(sum_sheet)
+                        df_sum.columns = [str(c).strip() for c in df_sum.columns]
+                        filtered_sum = smart_filter_df(df_sum)
+                        if not filtered_sum.empty:
+                            st.dataframe(filtered_sum, use_container_width=True)
+                        else:
+                            st.info("No summary record found for this employee.")
+
+                    # --- Tab 2: Error-OtherTasks (严格匹配 B列) ---
+                    with tab_error:
+                        st.markdown("### Error & Other Tasks")
+                        err_sheet = find_sheet("error") or find_sheet("other")
+                        if err_sheet:
+                            df_err = excel_file.parse(err_sheet)
+                            df_err.columns = [str(c).strip() for c in df_err.columns]
+                            filtered_err = filter_by_col_b(df_err)
+                            if not filtered_err.empty:
+                                st.dataframe(filtered_err, use_container_width=True)
+                            else:
+                                st.success("No error records found. (No error)")
                         else:
                             st.success("No error records found. (No error)")
-                    else:
-                        st.success("No error records found. (No error)")
 
-                # --- Tab 3: Bonus ---
-                with tab_bonus:
-                    st.markdown("### Bonus Details")
-                    bonus_sheet = find_sheet("bonus")
-                    if bonus_sheet:
-                        df_bonus = excel_file.parse(bonus_sheet)
-                        df_bonus.columns = [str(c).strip() for c in df_bonus.columns]
-                        filtered_bonus = smart_filter_df(df_bonus)
-                        if not filtered_bonus.empty:
-                            st.dataframe(filtered_bonus, use_container_width=True)
+                    # --- Tab 3: Bonus (严格匹配 B列) ---
+                    with tab_bonus:
+                        st.markdown("### Bonus Details")
+                        bonus_sheet = find_sheet("bonus")
+                        if bonus_sheet:
+                            df_bonus = excel_file.parse(bonus_sheet)
+                            df_bonus.columns = [str(c).strip() for c in df_bonus.columns]
+                            filtered_bonus = filter_by_col_b(df_bonus)
+                            if not filtered_bonus.empty:
+                                st.dataframe(filtered_bonus, use_container_width=True)
+                            else:
+                                st.info("No bonus records found. (No bonus)")
                         else:
                             st.info("No bonus records found. (No bonus)")
-                    else:
-                        st.info("No bonus records found. (No bonus)")
 
-                # --- Tab 4: Picking (带入名字筛选) ---
-                with tab_picking:
-                    st.markdown(f"### Picking Records ({input_name})")
-                    pick_sheet = find_sheet("picking")
-                    if pick_sheet:
-                        df_pick = excel_file.parse(pick_sheet)
-                        df_pick.columns = [str(c).strip() for c in df_pick.columns]
-                        filtered_pick = smart_filter_df(df_pick)
-                        if not filtered_pick.empty:
-                            st.dataframe(filtered_pick, use_container_width=True)
-                        else:
-                            st.warning(f"在 Picking 中未找到与 {input_name} 直接匹配的行，展示全表：")
+                    # --- Tab 4: Picking ---
+                    with tab_picking:
+                        st.markdown(f"### Picking Records ({input_name})")
+                        pick_sheet_name = find_sheet_by_exact_or_partial_name("picking", input_name)
+                        if pick_sheet_name:
+                            df_pick = excel_file.parse(pick_sheet_name)
+                            df_pick.columns = [str(c).strip() for c in df_pick.columns]
                             st.dataframe(df_pick, use_container_width=True)
-                    else:
-                        st.warning("未找到 Picking 分页。")
-
-                # --- Tab 5: Putaway (带入名字筛选) ---
-                with tab_putaway:
-                    st.markdown(f"### Putaway Records ({input_name})")
-                    put_sheet = find_sheet("putaway")
-                    if put_sheet:
-                        df_put = excel_file.parse(put_sheet)
-                        df_put.columns = [str(c).strip() for c in df_put.columns]
-                        filtered_put = smart_filter_df(df_put)
-                        if not filtered_put.empty:
-                            st.dataframe(filtered_put, use_container_width=True)
                         else:
-                            st.warning(f"在 Putaway 中未找到与 {input_name} 直接匹配的行，展示全表：")
+                            st.warning(f"未找到包含 '{input_name}' 的 Picking 分页。")
+
+                    # --- Tab 5: Putaway ---
+                    with tab_putaway:
+                        st.markdown(f"### Putaway Records ({input_name})")
+                        put_sheet_name = find_sheet_by_exact_or_partial_name("putaway", input_name)
+                        if put_sheet_name:
+                            df_put = excel_file.parse(put_sheet_name)
+                            df_put.columns = [str(c).strip() for c in df_put.columns]
                             st.dataframe(df_put, use_container_width=True)
-                    else:
-                        st.warning("未找到 Putaway 分页。")
-        else:
-            if not st.session_state.logged_in:
-                st.sidebar.warning("👈 请先在上方登录！")
+                        else:
+                            st.warning(f"未找到包含 '{input_name}' 的 Putaway 分页。")
             else:
-                st.info("👈 请在左侧上传 KPI Excel 文件。")
-    else:
-        st.info("👈 请先登录并上传 Excel 文件。")
+                st.error(f"无法从网盘下载或解析 {selected_month} 的 Excel 文件。")
+        else:
+            st.warning(f"管理员尚未在 Google Sheets 中绑定 **{selected_month}** 的 KPI 文件。")
 else:
-    st.error("无法加载员工账号表。")
+    st.error("无法加载后台配置表，请检查 Google Sheets 连接。")
