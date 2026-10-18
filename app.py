@@ -1,299 +1,108 @@
 import streamlit as st
 import pandas as pd
-import io
 import requests
+import io
 
-# ---------------------------------------------------------
-# 1. Page Configuration
-# ---------------------------------------------------------
-st.set_page_config(page_title="NJ7 Employee KPI Portal", page_icon="📊", layout="wide")
+# 页面基本设置
+st.set_page_config(
+    page_title="NJ7 KPI Checking Portal",
+    page_icon="📊",
+    layout="wide"
+)
 
-st.title("📊 NJ7 Warehouse Employee KPI Portal")
+# OneDrive 配置文件分享链接
+ONEDRIVE_ORIGINAL_URL = "https://1drv.ms/x/c/21f1717b0dd121e7/IQC2PHbLplJjQ4Japq2ydbwbAd6OCzvcsdnmEaed4QiEYSc?e=elT9dv"
+
+@st.cache_data(ttl=300)  # 缓存5分钟，避免频繁请求OneDrive
+def load_excel_from_onedrive(url):
+    # 将 OneDrive 分享链接转换为直接下载链接
+    # 针对 1drv.ms 短链的通用转换与带 Headers 的稳定请求
+    download_url = url.replace("https://1drv.ms/x/c/", "https://onedrive.live.com/download?resid=")
+    download_url = download_url.replace("?", "&")
+    if "download=1" not in download_url:
+        download_url += "&download=1"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+
+    try:
+        response = requests.get(download_url, headers=headers, timeout=15)
+        response.raise_for_status()
+        excel_data = io.BytesIO(response.content)
+        # 读取全部 Sheets
+        xls = pd.ExcelFile(excel_data, engine='openpyxl')
+        return xls
+    except Exception as e:
+        # 如果常规转换方式被阻断，尝试使用 1drv.ms 重定向跟踪获取直链
+        try:
+            s = requests.Session()
+            res = s.get(url, headers=headers, allow_redirects=True)
+            final_url = res.url
+            if "resid=" in final_url:
+                resid = final_url.split("resid=")[1].split("&")[0]
+                authkey = final_url.split("authkey=")[1].split("&")[0] if "authkey=" in final_url else ""
+                direct_url = f"https://onedrive.live.com/download?resid={resid}"
+                if authkey:
+                    direct_url += f"&authkey={authkey}"
+                response2 = s.get(direct_url, headers=headers, timeout=15)
+                response2.raise_for_status()
+                return pd.ExcelFile(io.BytesIO(response2.content), engine='openpyxl')
+            else:
+                raise Exception(f"Unable to parse direct download URL: {e}")
+        except Exception as ex:
+            st.error(f"Error loading Excel file from OneDrive: {ex}")
+            return None
+
+# 标题栏
+st.title("📊 NJ7 Warehouse Performance Portal")
 st.caption("Note: Read-only access to individual performance metrics. Updated daily.")
 st.markdown("---")
 
-# ---------------------------------------------------------
-# 2. Master Config Link
-# OneDrive Direct Link for 'NJ7 KPI checking config.xlsx'
-# ---------------------------------------------------------
-MASTER_CONFIG_URL = "https://1drv.ms/x/c/21f1717b0dd121e7/IQC2PHbLplJjQ4Japq2ydbwbAd6OCzvcsdnmEaed4QiEYSc?e=elT9dv"
+# 加载 OneDrive Excel 文件
+excel_file = load_excel_from_onedrive(ONEDRIVE_ORIGINAL_URL)
 
-
-def convert_onedrive_url(url):
-    """Automatically convert OneDrive share links to direct download links."""
-    if not isinstance(url, str) or not url.strip():
-        return None
-    url = url.strip()
-    if "1drv.ms" in url or "onedrive.live.com" in url:
-        if "?e=" in url:
-            if "&download=1" not in url:
-                return url + "&download=1"
-            return url
-        else:
-            return url + "?download=1"
-    return url
-
-
-@st.cache_data(ttl=60)
-def load_excel_file(url):
-    """Load ExcelFile object to access multiple sheets dynamically."""
-    try:
-        direct_url = convert_onedrive_url(url)
-        if not direct_url or "YOUR_ONEDRIVE" in direct_url:
-            return None
-        
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(direct_url, headers=headers, timeout=20)
-        response.raise_for_status()
-        
-        excel_file = pd.ExcelFile(io.BytesIO(response.content))
-        return excel_file
-    except Exception as e:
-        st.error(f"Error loading Excel file from OneDrive: {e}")
-        return None
-
-# Load master config file
-master_excel = load_excel_file(MASTER_CONFIG_URL)
-
-# Initialize Session State
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
-if "user_info" not in st.session_state:
-    st.session_state["user_info"] = {}
-
-# ---------------------------------------------------------
-# 3. Login Interface
-# ---------------------------------------------------------
-if not st.session_state["logged_in"]:
-    st.subheader("🔒 Employee Login")
+if excel_file is not None:
+    sheet_names = excel_file.sheet_names
     
-    if master_excel is not None and "account" in master_excel.sheet_names:
-        account_df = master_excel.parse("account")
-        account_df.columns = account_df.columns.astype(str).str.strip()
+    # 登录框及身份验证
+    st.sidebar.header("🔐 Employee Login")
+    role = st.sidebar.selectbox("Select Role / 角色选择", ["Driver", "Scanner", "Admin"])
+    user_id = st.sidebar.text_input("Enter Employee ID / 输入工号", value="").strip()
+
+    if user_id:
+        st.sidebar.success(f"Logged in as: {user_id} ({role})")
         
-        # Position Selection (Type)
-        type_options = ["driver", "scanner"]
-        selected_type = st.radio("Select Position (Type):", type_options, horizontal=True)
+        # 匹配对应 Role 的工作表
+        matched_sheets = [s for s in sheet_names if role.lower() in s.lower()]
+        if not matched_sheets:
+            # 如果没有找到精确匹配，使用所有非 Config 工作表
+            matched_sheets = [s for s in sheet_names if "config" not in s.lower()]
+
+        selected_sheet = st.selectbox("Select Data Sheet / 选择数据表", matched_sheets)
         
-        # Filter account dataframe by type
-        type_filtered_df = account_df[account_df["type"].astype(str).str.strip().str.lower() == selected_type]
-        
-        # Gather all names across Column A (name), Column C (name2), Column D (name3)
-        available_names = set()
-        for _, row in type_filtered_df.iterrows():
-            for col in ["name", "name2", "name3"]:
-                if col in row and pd.notna(row[col]):
-                    val = str(row[col]).strip()
-                    if val and val.lower() != "nan":
-                        available_names.add(val)
-                        
-        sorted_names = sorted(list(available_names))
-        
-        selected_name = st.selectbox("Select Your Name:", ["-- Please Select --"] + sorted_names)
-        input_pwd = st.text_input("Enter Password:", type="password")
-        
-        if st.button("Log In", use_container_width=True):
-            if selected_name == "-- Please Select --":
-                st.warning("⚠️ Please select your name.")
-            else:
-                # Match user across name, name2, or name3
-                matched_row = type_filtered_df[
-                    (type_filtered_df["name"].astype(str).str.strip().str.lower() == selected_name.lower()) |
-                    (type_filtered_df["name2"].astype(str).str.strip().str.lower() == selected_name.lower()) |
-                    (type_filtered_df["name3"].astype(str).str.strip().str.lower() == selected_name.lower())
-                ]
+        if selected_sheet:
+            df = pd.read_excel(excel_file, sheet_name=selected_sheet)
+            
+            # 清理列名空格
+            df.columns = [str(c).strip() for c in df.columns]
+            
+            # 寻找 ID 或 Name 相关的列名（不区分大小写）
+            id_cols = [c for c in df.columns if any(k in c.lower() for k in ["id", "code", "工号", "driver", "scanner", "name", "姓名"])]
+            
+            if id_cols and role != "Admin":
+                # 按用户工号过滤数据
+                primary_id_col = id_cols[0]
+                filtered_df = df[df[primary_id_col].astype(str).str.strip().str.lower() == user_id.lower()]
                 
-                if not matched_row.empty:
-                    correct_pwd = str(matched_row["pw"].values[0]).strip()
-                    if correct_pwd.endswith(".0"):
-                        correct_pwd = correct_pwd[:-2]
-                        
-                    if str(input_pwd).strip() == correct_pwd:
-                        st.session_state["logged_in"] = True
-                        st.session_state["user_info"] = {
-                            "name": selected_name,
-                            "type": selected_type,
-                            "primary_name": str(matched_row["name"].values[0]).strip()
-                        }
-                        st.rerun()
-                    else:
-                        st.error("❌ Incorrect password. Please try again.")
+                if not filtered_df.empty:
+                    st.subheader(f"📋 Performance Records for ID: {user_id}")
+                    st.dataframe(filtered_df, use_container_width=True)
                 else:
-                    st.error("❌ Selected name not found under this Position.")
+                    st.warning(f"No records found for Employee ID: {user_id} in sheet '{selected_sheet}'.")
+            else:
+                # Admin 角色显示全表数据
+                st.subheader(f"📋 Full Data Sheet: {selected_sheet}")
+                st.dataframe(df, use_container_width=True)
     else:
-        st.info("ℹ️ Loading Master Config... Please make sure MASTER_CONFIG_URL is properly configured.")
-
-# ---------------------------------------------------------
-# 4. Main Dashboard Page
-# ---------------------------------------------------------
-else:
-    user_name = st.session_state["user_info"]["name"]
-    user_type = st.session_state["user_info"]["type"]
-    primary_name = st.session_state["user_info"]["primary_name"]
-    
-    col_user, col_logout = st.columns([4, 1])
-    with col_user:
-        badge = "📦 Scanner" if user_type == "scanner" else "🚛 Driver"
-        st.success(f"👋 Welcome, **{user_name}** ({badge})")
-    with col_logout:
-        if st.button("Log Out"):
-            st.session_state["logged_in"] = False
-            st.session_state["user_info"] = {}
-            st.rerun()
-            
-    st.markdown("---")
-
-    # Read 'KPI' config sheet for monthly file links
-    if master_excel is not None and "KPI" in master_excel.sheet_names:
-        kpi_config_df = master_excel.parse("KPI")
-        kpi_config_df.columns = kpi_config_df.columns.astype(str).str.strip()
-        
-        valid_kpi_df = kpi_config_df.dropna(subset=["OneDrive_Direct_Link"])
-        valid_kpi_df = valid_kpi_df[valid_kpi_df["OneDrive_Direct_Link"].astype(str).str.strip() != ""]
-        
-        if not valid_kpi_df.empty:
-            month_options = valid_kpi_df["Month_Label"].astype(str).str.strip().unique().tolist()
-            selected_month = st.selectbox("📅 Select Month:", month_options)
-            
-            target_url = valid_kpi_df[valid_kpi_df["Month_Label"].astype(str).str.strip() == selected_month]["OneDrive_Direct_Link"].values[0]
-            
-            # Load selected month's Excel file
-            month_excel = load_excel_file(target_url)
-            
-            if month_excel is not None:
-                sheet_names_list = month_excel.sheet_names
-                
-                # =========================================================
-                # A. SCANNER LOGIC
-                # =========================================================
-                if user_type == "scanner":
-                    possible_sheets = [f"{user_name}-scan", f"{primary_name}-scan"]
-                    target_sheet = None
-                    for s in sheet_names_list:
-                        if s.strip().lower() in [p.lower() for p in possible_sheets]:
-                            target_sheet = s
-                            break
-                            
-                    if target_sheet:
-                        sheet_df = month_excel.parse(target_sheet, header=None)
-                        b1_val = str(sheet_df.iloc[0, 1]).strip() if sheet_df.shape[0] > 0 and sheet_df.shape[1] > 1 else ""
-                        
-                        st.subheader(f"📋 Scanner Performance: [{target_sheet}] ({selected_month})")
-                        st.caption(f"Verified B1 Name: **{b1_val}**")
-                        st.dataframe(sheet_df, use_container_width=True, height=650)
-                    else:
-                        st.error(f"❌ Could not find scanner sheet '{user_name}-scan' for {selected_month}.")
-
-                # =========================================================
-                # B. DRIVER LOGIC (5 Tabs)
-                # =========================================================
-                else:
-                    st.subheader(f"🚛 Driver KPI Portal - {user_name} ({selected_month})")
-                    
-                    # Create 5 Tabs for Driver
-                    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                        "1. Summary", 
-                        "2. Error-OtherTasks", 
-                        "3. Bonus", 
-                        "4. Picking Detail", 
-                        "5. Putaway Detail"
-                    ])
-                    
-                    name_keys = [user_name.lower(), primary_name.lower()]
-                    
-                    # ---------------- TAB 1: Summary ----------------
-                    with tab1:
-                        if "Summary" in sheet_names_list:
-                            summary_df = month_excel.parse("Summary", header=6)
-                            summary_df.columns = summary_df.columns.astype(str).str.strip()
-                            
-                            if "Name" in summary_df.columns:
-                                user_summary = summary_df[summary_df["Name"].astype(str).str.strip().str.lower().isin(name_keys)]
-                                
-                                if not user_summary.empty:
-                                    st.markdown("#### 📊 Summary Metrics")
-                                    st.dataframe(user_summary, use_container_width=True)
-                                else:
-                                    st.info(f"💡 No Summary record found for **{user_name}**.")
-                            else:
-                                st.error("❌ 'Name' column not found in Summary sheet.")
-                        else:
-                            st.error("❌ 'Summary' sheet not found in this month's Excel file.")
-                            
-                    # ---------------- TAB 2: Error-OtherTasks ----------------
-                    with tab2:
-                        if "Error-OtherTasks" in sheet_names_list:
-                            error_df = month_excel.parse("Error-OtherTasks", header=0)
-                            error_df.columns = error_df.columns.astype(str).str.strip()
-                            
-                            name_col = [c for c in error_df.columns if "name" in c.lower()][0] if any("name" in c.lower() for c in error_df.columns) else error_df.columns[1]
-                            
-                            user_errors = error_df[error_df[name_col].astype(str).str.strip().str.lower().isin(name_keys)]
-                            
-                            if not user_errors.empty:
-                                st.markdown("#### ⚠️ Task Error Records")
-                                st.dataframe(user_errors, use_container_width=True)
-                            else:
-                                st.success("✅ **No Error** found for this month!")
-                        else:
-                            st.info("ℹ️ 'Error-OtherTasks' sheet not found.")
-
-                    # ---------------- TAB 3: Bonus ----------------
-                    with tab3:
-                        if "Bonus" in sheet_names_list:
-                            bonus_df = month_excel.parse("Bonus", header=0)
-                            bonus_df.columns = bonus_df.columns.astype(str).str.strip()
-                            
-                            name_col = [c for c in bonus_df.columns if "name" in c.lower()][0] if any("name" in c.lower() for c in bonus_df.columns) else bonus_df.columns[1]
-                            
-                            user_bonus = bonus_df[bonus_df[name_col].astype(str).str.strip().str.lower().isin(name_keys)]
-                            
-                            if not user_bonus.empty:
-                                st.markdown("#### 🎁 Bonus Records")
-                                st.dataframe(user_bonus, use_container_width=True)
-                            else:
-                                st.info("💡 **No Bonus** recorded for this month.")
-                        else:
-                            st.info("ℹ️ 'Bonus' sheet not found.")
-
-                    # ---------------- TAB 4: Picking Detail ----------------
-                    with tab4:
-                        picking_sheets = [f"Picking - {user_name}", f"Picking - {primary_name}"]
-                        target_pick_sheet = None
-                        for s in sheet_names_list:
-                            if s.strip().lower() in [p.lower() for p in picking_sheets]:
-                                target_pick_sheet = s
-                                break
-                                
-                        if target_pick_sheet:
-                            pick_df = month_excel.parse(target_pick_sheet, header=None)
-                            b1_pick_name = str(pick_df.iloc[0, 1]).strip() if pick_df.shape[0] > 0 and pick_df.shape[1] > 1 else ""
-                            
-                            st.markdown(f"#### 📦 Picking Detail: [{target_pick_sheet}]")
-                            st.caption(f"Verified B1 Name: **{b1_pick_name}**")
-                            st.dataframe(pick_df, use_container_width=True, height=600)
-                        else:
-                            st.warning(f"⚠️ Picking sheet for **{user_name}** was not found in {selected_month}.")
-
-                    # ---------------- TAB 5: Putaway Detail ----------------
-                    with tab5:
-                        putaway_sheets = [f"Putaway - {user_name}", f"Putaway - {primary_name}"]
-                        target_putaway_sheet = None
-                        for s in sheet_names_list:
-                            if s.strip().lower() in [p.lower() for p in putaway_sheets]:
-                                target_putaway_sheet = s
-                                break
-                                
-                        if target_putaway_sheet:
-                            putaway_df = month_excel.parse(target_putaway_sheet, header=None)
-                            b1_putaway_name = str(putaway_df.iloc[0, 1]).strip() if putaway_df.shape[0] > 0 and putaway_df.shape[1] > 1 else ""
-                            
-                            st.markdown(f"#### 🚜 Putaway Detail: [{target_putaway_sheet}]")
-                            st.caption(f"Verified B1 Name: **{b1_putaway_name}**")
-                            st.dataframe(putaway_df, use_container_width=True, height=600)
-                        else:
-                            st.warning(f"⚠️ Putaway sheet for **{user_name}** was not found in {selected_month}.")
-            else:
-                st.error("❌ Failed to load Excel file from OneDrive link.")
-        else:
-            st.warning("⚠️ No valid OneDrive links configured in KPI sheet.")
+        st.info("👈 Please enter your Employee ID in the sidebar to view your performance metrics.")
