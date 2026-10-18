@@ -12,7 +12,6 @@ st.set_page_config(
 # 你的 Google Sheets 基础 ID
 SPREADSHEET_ID = "1NOLL3GNkIzBIYHIEwV6D55kJ6vsixkSBFj0LVjuTkvI"
 
-# 实时读取账号表与配置表（加入时间戳参数，彻底消除 Google 的缓存延迟）
 def load_users_realtime(spreadsheet_id):
     try:
         ts = int(time.time())
@@ -33,17 +32,14 @@ def load_config_data(spreadsheet_id):
     except Exception as e:
         return None
 
-# 初始化 Session State 用于保持登录状态
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_info = None
 
-# 网页标题
 st.title("📊 NJ7 Warehouse Performance Portal")
 st.caption("Note: Read-only access to individual performance metrics. Updated daily.")
 st.markdown("---")
 
-# 实时加载账号表与配置表
 users_df = load_users_realtime(SPREADSHEET_ID)
 config_df = load_config_data(SPREADSHEET_ID)
 
@@ -55,11 +51,25 @@ if users_df is not None and config_df is not None:
     selected_month = st.sidebar.selectbox("Select Month / 选择月份", months)
     
     row = valid_config[valid_config["Month_Label"] == selected_month]
-    link_cols = [c for c in config_df.columns if "link" in c.lower() or "url" in c.lower() or "file" in c.lower()]
     
-    raw_link_val = ""
-    if not row.empty and link_cols:
-        raw_link_val = str(row[link_cols[0]].values[0]).strip()
+    # 优先寻找包含直链的列（寻找 C 列或名字带 link/url/direct 的列）
+    link_val = ""
+    if not row.empty:
+        cols = config_df.columns
+        # 如果有第 3 列（索引为 2 的 C 列），直接取 C 列的值作为下载直链
+        if len(cols) > 2:
+            val_c = str(row.iloc[0, 2]).strip()
+            if "http" in val_c:
+                link_val = val_c
+        
+        # 如果 C 列没找到，再从其他列搜
+        if not link_val:
+            link_cols = [c for c in cols if any(k in c.lower() for k in ["link", "url", "file", "direct"])]
+            for c in link_cols:
+                v = str(row[c].values[0]).strip()
+                if "http" in v:
+                    link_val = v
+                    break
 
     if not st.session_state.logged_in:
         with st.sidebar.form("login_form"):
@@ -92,9 +102,9 @@ if users_df is not None and config_df is not None:
             st.session_state.user_info = None
             st.rerun()
 
-        if raw_link_val and raw_link_val != "nan":
-            target_url = raw_link_val
-            if "drive.google.com" in target_url:
+        if link_val and link_val != "nan":
+            target_url = link_val
+            if "drive.google.com" in target_url and "export=download" not in target_url:
                 if "/file/d/" in target_url:
                     file_id = target_url.split("/file/d/")[1].split("/")[0]
                     target_url = f"https://docs.google.com/uc?export=download&id={file_id}"
