@@ -38,7 +38,7 @@ if "logged_in" not in st.session_state:
     st.session_state.user_info = None
 
 st.title("📊 NJ7 Warehouse Performance Portal")
-st.caption("Note: Read-only access to individual performance metrics. Secure isolation mode.")
+st.caption("Note: Read-only access to individual performance metrics.")
 st.markdown("---")
 
 users_df = load_users_realtime(SPREADSHEET_ID)
@@ -70,13 +70,13 @@ if users_df is not None and config_df is not None:
     if not st.session_state.logged_in:
         with st.sidebar.form("login_form"):
             st.subheader("Login / 登录")
-            input_name = st.text_input("Name / 名字 (A/C/D列)").strip()
+            input_name = st.text_input("Name / 名字 (A列标准名)").strip()
             input_pw = st.text_input("Password / 密码", type="password").strip()
             input_role = st.selectbox("Role / 职位选择", ["driver", "scanner"])
             submit_btn = st.form_submit_button("Login / 登录")
             
             if submit_btn:
-                # 严格匹配：名字必须在 name/name2/name3 中吻合，且密码正确，且职位吻合
+                # 登录时支持在 A/C/D 列（name, name2, name3）中匹配输入的名字
                 match_rows = users_df[
                     (users_df["pw"].fillna("").astype(str).str.strip() == input_pw) &
                     (
@@ -98,13 +98,19 @@ if users_df is not None and config_df is not None:
                     st.error("Invalid Name, Password or Role / 姓名、密码或职位错误")
     else:
         user_info = st.session_state.user_info
-        input_name = st.session_state.get("searched_name", user_info.get("name", ""))
+        standard_name = str(user_info.get("name", "")).strip() # A列标准分页名
         user_role = st.session_state.get("selected_role", str(user_info.get("type", "driver")).strip()).lower()
         
-        # 获取当前登录账号在配置表中绑定的真实唯一名字（防止同名串号）
-        primary_real_name = str(user_info.get("name", "")).strip().lower()
-        
-        st.sidebar.success(f"Welcome, {input_name}!\nRole: {user_role.upper()}")
+        # 收集当前账号的所有名字（name, name2, name3），用于后续多条件安全过滤
+        allowed_names = set()
+        for col_key in ["name", "name2", "name3"]:
+            val = str(user_info.get(col_key, "")).strip().lower()
+            if val and val != "nan":
+                allowed_names.add(val)
+        if not allowed_names:
+            allowed_names.add(standard_name.lower())
+
+        st.sidebar.success(f"Welcome, {standard_name}!\nRole: {user_role.upper()}")
         
         if st.sidebar.button("Log out / 登出"):
             st.session_state.logged_in = False
@@ -128,50 +134,54 @@ if users_df is not None and config_df is not None:
                     sheet_names = []
 
             if excel_file is not None:
-                def strict_filter_df(df):
-                    """严格匹配：要求单元格内容与该员工的名字完全一致（防止误伤或看到别人）"""
+                def filter_by_allowed_names(df):
+                    """通用过滤：检查表格任意列是否等于 allowed_names 中的任意一个名字"""
                     if df is None or df.empty:
                         return pd.DataFrame()
                     mask = pd.Series(False, index=df.index)
                     for col in df.columns:
                         col_series = df[col].fillna("").astype(str).str.strip().str.lower()
-                        # 精确匹配登录的主名字
-                        mask = mask | (col_series == primary_real_name)
+                        for name in allowed_names:
+                            mask = mask | (col_series == name)
                     return df[mask]
 
-                def strict_filter_by_col_b(df):
-                    """Error 和 Bonus 专用：严格检查 B列 是否等于该员工的名字"""
+                def filter_col_b_by_allowed_names(df):
+                    """Error 和 Bonus 专用：检查 B列 是否等于 allowed_names 中的任意一个名字"""
                     if df is None or df.empty:
                         return pd.DataFrame()
                     if len(df.columns) < 2:
                         return pd.DataFrame()
                     col_b_name = df.columns[1]
                     col_b_series = df[col_b_name].fillna("").astype(str).str.strip().str.lower()
-                    mask = (col_b_series == primary_real_name)
+                    mask = pd.Series(False, index=df.index)
+                    for name in allowed_names:
+                        mask = mask | (col_b_series == name)
                     return df[mask]
 
                 def find_sheet(kw):
                     matches = [s for s in sheet_names if kw.lower() in s.lower()]
                     return matches[0] if matches else None
 
-                def find_secure_sheet(prefix, name):
-                    """安全查找 Picking / Putaway 专属分页（必须名字严格匹配）"""
+                def find_sheet_by_exact(prefix):
+                    """寻找包含标准名或其别名的专属分页"""
                     for s in sheet_names:
                         s_lower = s.lower()
-                        if prefix.lower() in s_lower and name.lower() in s_lower:
-                            return s
+                        if prefix.lower() in s_lower:
+                            for name in allowed_names:
+                                if name in s_lower:
+                                    return s
                     return None
 
                 # ==========================
                 # 1. SCANNER 岗位逻辑
                 # ==========================
                 if user_role == "scanner":
-                    st.subheader(f"📋 Scanner Performance ({selected_month}) - {input_name}")
+                    st.subheader(f"📋 Scanner Performance ({selected_month}) - {standard_name}")
                     target_scan_sheet = find_sheet("scan") or sheet_names[0]
                     df_scan = excel_file.parse(target_scan_sheet)
                     df_scan.columns = [str(c).strip() for c in df_scan.columns]
                     
-                    filtered_scan = strict_filter_df(df_scan)
+                    filtered_scan = filter_by_allowed_names(df_scan)
                     if not filtered_scan.empty:
                         st.dataframe(filtered_scan, use_container_width=True)
                     else:
@@ -181,7 +191,7 @@ if users_df is not None and config_df is not None:
                 # 2. DRIVER 岗位逻辑 (5个分页)
                 # ==========================
                 else:
-                    st.subheader(f"🚚 Driver Performance Portal ({selected_month}) - {input_name}")
+                    st.subheader(f"🚚 Driver Performance Portal ({selected_month}) - {standard_name}")
                     
                     tab_summary, tab_error, tab_bonus, tab_picking, tab_putaway = st.tabs([
                         "1. Summary", 
@@ -200,7 +210,7 @@ if users_df is not None and config_df is not None:
                         except Exception:
                             df_sum = excel_file.parse(sum_sheet)
                         df_sum.columns = [str(c).strip() for c in df_sum.columns]
-                        filtered_sum = strict_filter_df(df_sum)
+                        filtered_sum = filter_by_allowed_names(df_sum)
                         if not filtered_sum.empty:
                             st.dataframe(filtered_sum, use_container_width=True)
                         else:
@@ -213,7 +223,7 @@ if users_df is not None and config_df is not None:
                         if err_sheet:
                             df_err = excel_file.parse(err_sheet)
                             df_err.columns = [str(c).strip() for c in df_err.columns]
-                            filtered_err = strict_filter_by_col_b(df_err)
+                            filtered_err = filter_col_b_by_allowed_names(df_err)
                             if not filtered_err.empty:
                                 st.dataframe(filtered_err, use_container_width=True)
                             else:
@@ -228,7 +238,7 @@ if users_df is not None and config_df is not None:
                         if bonus_sheet:
                             df_bonus = excel_file.parse(bonus_sheet)
                             df_bonus.columns = [str(c).strip() for c in df_bonus.columns]
-                            filtered_bonus = strict_filter_by_col_b(df_bonus)
+                            filtered_bonus = filter_col_b_by_allowed_names(df_bonus)
                             if not filtered_bonus.empty:
                                 st.dataframe(filtered_bonus, use_container_width=True)
                             else:
@@ -238,8 +248,8 @@ if users_df is not None and config_df is not None:
 
                     # --- Tab 4: Picking ---
                     with tab_picking:
-                        st.markdown(f"### Picking Records ({input_name})")
-                        pick_sheet_name = find_secure_sheet("picking", primary_real_name)
+                        st.markdown(f"### Picking Records ({standard_name})")
+                        pick_sheet_name = find_sheet_by_exact("picking")
                         if pick_sheet_name:
                             df_pick = excel_file.parse(pick_sheet_name)
                             df_pick.columns = [str(c).strip() for c in df_pick.columns]
@@ -249,8 +259,8 @@ if users_df is not None and config_df is not None:
 
                     # --- Tab 5: Putaway ---
                     with tab_putaway:
-                        st.markdown(f"### Putaway Records ({input_name})")
-                        put_sheet_name = find_secure_sheet("putaway", primary_real_name)
+                        st.markdown(f"### Putaway Records ({standard_name})")
+                        put_sheet_name = find_sheet_by_exact("putaway")
                         if put_sheet_name:
                             df_put = excel_file.parse(put_sheet_name)
                             df_put.columns = [str(c).strip() for c in df_put.columns]
