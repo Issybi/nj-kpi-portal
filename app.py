@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import time
 
 # 页面基本设置
 st.set_page_config(
@@ -10,20 +11,22 @@ st.set_page_config(
 
 # 你的 Google Sheets 基础 ID
 SPREADSHEET_ID = "1NOLL3GNkIzBIYHIEwV6D55kJ6vsixkSBFj0LVjuTkvI"
-KPI_CONFIG_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=KPI"
-ACCOUNT_AC_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=KPI%20checking%20portal%20AC"
 
-# 实时读取账号表
-def load_users_realtime(url):
+# 实时读取账号表与配置表（加入时间戳参数，彻底消除 Google 的缓存延迟）
+def load_users_realtime(spreadsheet_id):
     try:
+        ts = int(time.time())
+        url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv&sheet=KPI%20checking%20portal%20AC&t={ts}"
         df = pd.read_csv(url, dtype=str)
         df.columns = [str(c).strip() for c in df.columns]
         return df
     except Exception as e:
         return None
 
-def load_config_data(url):
+def load_config_data(spreadsheet_id):
     try:
+        ts = int(time.time())
+        url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv&sheet=KPI&t={ts}"
         df = pd.read_csv(url)
         df.columns = [str(c).strip() for c in df.columns]
         return df
@@ -40,19 +43,17 @@ st.title("📊 NJ7 Warehouse Performance Portal")
 st.caption("Note: Read-only access to individual performance metrics. Updated daily.")
 st.markdown("---")
 
-# 1. 实时加载账号表与配置表
-users_df = load_users_realtime(ACCOUNT_AC_URL)
-config_df = load_config_data(KPI_CONFIG_URL)
+# 实时加载账号表与配置表
+users_df = load_users_realtime(SPREADSHEET_ID)
+config_df = load_config_data(SPREADSHEET_ID)
 
 if users_df is not None and config_df is not None:
     st.sidebar.header("🔐 Employee Portal")
     
-    # 月份选择放在最上面
     valid_config = config_df.dropna(subset=["Month_Label"])
     months = valid_config["Month_Label"].tolist()
     selected_month = st.sidebar.selectbox("Select Month / 选择月份", months)
     
-    # 获取对应月份的链接
     row = valid_config[valid_config["Month_Label"] == selected_month]
     link_cols = [c for c in config_df.columns if "link" in c.lower() or "url" in c.lower() or "file" in c.lower()]
     
@@ -60,7 +61,6 @@ if users_df is not None and config_df is not None:
     if not row.empty and link_cols:
         raw_link_val = str(row[link_cols[0]].values[0]).strip()
 
-    # 如果没有登录，显示登录表单与按钮
     if not st.session_state.logged_in:
         with st.sidebar.form("login_form"):
             st.subheader("Login / 登录")
@@ -81,7 +81,6 @@ if users_df is not None and config_df is not None:
                 else:
                     st.error("Invalid Name or Password / 姓名或密码错误")
     else:
-        # 已经登录成功后的显示
         user_info = st.session_state.user_info
         input_name = user_info.get("name", "")
         user_role = str(user_info.get("type", "driver")).strip()
@@ -93,7 +92,6 @@ if users_df is not None and config_df is not None:
             st.session_state.user_info = None
             st.rerun()
 
-        # 2. 数据加载与展示逻辑
         if raw_link_val and raw_link_val != "nan":
             target_url = raw_link_val
             if "drive.google.com" in target_url:
