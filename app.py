@@ -101,7 +101,7 @@ if users_df is not None and config_df is not None:
         standard_name = str(user_info.get("name", "")).strip() # A列标准分页名
         user_role = st.session_state.get("selected_role", str(user_info.get("type", "driver")).strip()).lower()
         
-        # 收集当前账号的所有名字（name, name2, name3），用于后续多条件安全过滤
+        # 收集当前账号的所有名字（name, name2, name3）
         allowed_names = set()
         for col_key in ["name", "name2", "name3"]:
             val = str(user_info.get(col_key, "")).strip().lower()
@@ -135,7 +135,6 @@ if users_df is not None and config_df is not None:
 
             if excel_file is not None:
                 def filter_by_allowed_names(df):
-                    """通用过滤：检查表格任意列是否等于 allowed_names 中的任意一个名字"""
                     if df is None or df.empty:
                         return pd.DataFrame()
                     mask = pd.Series(False, index=df.index)
@@ -146,7 +145,6 @@ if users_df is not None and config_df is not None:
                     return df[mask]
 
                 def filter_col_b_by_allowed_names(df):
-                    """Error 和 Bonus 专用：检查 B列 是否等于 allowed_names 中的任意一个名字"""
                     if df is None or df.empty:
                         return pd.DataFrame()
                     if len(df.columns) < 2:
@@ -163,10 +161,19 @@ if users_df is not None and config_df is not None:
                     return matches[0] if matches else None
 
                 def find_sheet_by_exact(prefix):
-                    """寻找包含标准名或其别名的专属分页"""
                     for s in sheet_names:
                         s_lower = s.lower()
                         if prefix.lower() in s_lower:
+                            for name in allowed_names:
+                                if name in s_lower:
+                                    return s
+                    return None
+
+                def find_scan_sheet():
+                    """专门匹配 Scanner 专属分页（支持 'Lucia-scan'、'lucia - scan' 等命名）"""
+                    for s in sheet_names:
+                        s_lower = s.lower()
+                        if "scan" in s_lower:
                             for name in allowed_names:
                                 if name in s_lower:
                                     return s
@@ -177,99 +184,15 @@ if users_df is not None and config_df is not None:
                 # ==========================
                 if user_role == "scanner":
                     st.subheader(f"📋 Scanner Performance ({selected_month}) - {standard_name}")
-                    target_scan_sheet = find_sheet("scan") or sheet_names[0]
-                    df_scan = excel_file.parse(target_scan_sheet)
-                    df_scan.columns = [str(c).strip() for c in df_scan.columns]
+                    scan_sheet_name = find_scan_sheet()
                     
-                    filtered_scan = filter_by_allowed_names(df_scan)
-                    if not filtered_scan.empty:
-                        st.dataframe(filtered_scan, use_container_width=True)
+                    if scan_sheet_name:
+                        df_scan = excel_file.parse(scan_sheet_name)
+                        df_scan.columns = [str(c).strip() for c in df_scan.columns]
+                        st.dataframe(df_scan, use_container_width=True)
                     else:
-                        st.warning("未找到属于您的绩效记录。")
-
-                # ==========================
-                # 2. DRIVER 岗位逻辑 (5个分页)
-                # ==========================
-                else:
-                    st.subheader(f"🚚 Driver Performance Portal ({selected_month}) - {standard_name}")
-                    
-                    tab_summary, tab_error, tab_bonus, tab_picking, tab_putaway = st.tabs([
-                        "1. Summary", 
-                        "2. Error-OtherTasks", 
-                        "3. Bonus", 
-                        "4. Picking", 
-                        "5. Putaway"
-                    ])
-
-                    # --- Tab 1: Summary ---
-                    with tab_summary:
-                        st.markdown("### Summary (个人绩效摘要)")
-                        sum_sheet = find_sheet("summary") or sheet_names[0]
-                        try:
-                            df_sum = excel_file.parse(sum_sheet, header=6)
-                        except Exception:
-                            df_sum = excel_file.parse(sum_sheet)
-                        df_sum.columns = [str(c).strip() for c in df_sum.columns]
-                        filtered_sum = filter_by_allowed_names(df_sum)
-                        if not filtered_sum.empty:
-                            st.dataframe(filtered_sum, use_container_width=True)
-                        else:
-                            st.info("No summary record found.")
-
-                    # --- Tab 2: Error-OtherTasks ---
-                    with tab_error:
-                        st.markdown("### Error & Other Tasks")
-                        err_sheet = find_sheet("error") or find_sheet("other")
-                        if err_sheet:
-                            df_err = excel_file.parse(err_sheet)
-                            df_err.columns = [str(c).strip() for c in df_err.columns]
-                            filtered_err = filter_col_b_by_allowed_names(df_err)
-                            if not filtered_err.empty:
-                                st.dataframe(filtered_err, use_container_width=True)
-                            else:
-                                st.success("No error records found. (No error)")
-                        else:
-                            st.success("No error records found. (No error)")
-
-                    # --- Tab 3: Bonus ---
-                    with tab_bonus:
-                        st.markdown("### Bonus Details")
-                        bonus_sheet = find_sheet("bonus")
-                        if bonus_sheet:
-                            df_bonus = excel_file.parse(bonus_sheet)
-                            df_bonus.columns = [str(c).strip() for c in df_bonus.columns]
-                            filtered_bonus = filter_col_b_by_allowed_names(df_bonus)
-                            if not filtered_bonus.empty:
-                                st.dataframe(filtered_bonus, use_container_width=True)
-                            else:
-                                st.info("No bonus records found. (No bonus)")
-                        else:
-                            st.info("No bonus records found. (No bonus)")
-
-                    # --- Tab 4: Picking ---
-                    with tab_picking:
-                        st.markdown(f"### Picking Records ({standard_name})")
-                        pick_sheet_name = find_sheet_by_exact("picking")
-                        if pick_sheet_name:
-                            df_pick = excel_file.parse(pick_sheet_name)
-                            df_pick.columns = [str(c).strip() for c in df_pick.columns]
-                            st.dataframe(df_pick, use_container_width=True)
-                        else:
-                            st.warning("未找到专属的 Picking 绩效分页。")
-
-                    # --- Tab 5: Putaway ---
-                    with tab_putaway:
-                        st.markdown(f"### Putaway Records ({standard_name})")
-                        put_sheet_name = find_sheet_by_exact("putaway")
-                        if put_sheet_name:
-                            df_put = excel_file.parse(put_sheet_name)
-                            df_put.columns = [str(c).strip() for c in df_put.columns]
-                            st.dataframe(df_put, use_container_width=True)
-                        else:
-                            st.warning("未找到专属的 Putaway 绩效分页。")
-            else:
-                st.error(f"无法下载或解析 {selected_month} 的数据文件。")
-        else:
-            st.warning(f"管理员尚未绑定 **{selected_month}** 的 KPI 文件。")
-else:
-    st.error("无法加载后台配置表。")
+                        # 兜底逻辑：如果没找到专属分页，尝试读总 scan 表并过滤
+                        target_scan_sheet = find_sheet("scan")
+                        if target_scan_sheet:
+                            df_scan = excel_file.parse(target_scan_sheet)
+                            df_
