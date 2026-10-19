@@ -18,10 +18,9 @@ def load_users_realtime(spreadsheet_id):
     try:
         url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv&sheet=KPI%20checking%20portal%20AC"
         df = pd.read_csv(url, dtype=str)
-        df.columns = [str(c).strip().lower() for c in df.columns] # 转小写去空格，防止匹配失败
+        df.columns = [str(c).strip().lower() for c in df.columns]
         return df
     except Exception as e:
-        st.error(f"加载用户表异常: {e}")
         return None
 
 @st.cache_data(ttl=10)
@@ -32,7 +31,6 @@ def load_config_data(spreadsheet_id):
         df.columns = [str(c).strip() for c in df.columns]
         return df
     except Exception as e:
-        st.error(f"加载配置表异常: {e}")
         return None
 
 def convert_drive_url(url_cell_content):
@@ -75,7 +73,6 @@ else:
     else:
         selected_month = st.sidebar.selectbox("Select Month / 选择月份", months)
         
-        # 精准定位当前选中月份，读取 C 列（索引 2）
         row = valid_config[valid_config.iloc[:, 0].astype(str).str.strip() == str(selected_month).strip()]
         link_val = ""
         if not row.empty and len(row.columns) > 2:
@@ -90,7 +87,6 @@ else:
                 submit_btn = st.form_submit_button("Login / 登录")
                 
                 if submit_btn:
-                    # 宽松匹配登录信息
                     name_col = "name" if "name" in users_df.columns else users_df.columns[0]
                     pw_col = "pw" if "pw" in users_df.columns else users_df.columns[1]
                     type_col = "type" if "type" in users_df.columns else users_df.columns[2]
@@ -111,7 +107,6 @@ else:
                         st.error("Invalid Name, Password or Role / 姓名、密码或职位错误")
         else:
             user_info = st.session_state.user_info
-            # 兼容不同列名大小写
             std_name_key = next((c for c in user_info.keys() if c.lower() == "name"), list(user_info.keys())[0])
             standard_name = str(user_info.get(std_name_key, "")).strip()
             user_role = st.session_state.get("selected_role", "driver").lower()
@@ -228,9 +223,11 @@ else:
                             st.markdown("### Summary (个人绩效摘要)")
                             sum_sheet = find_sheet_by_keyword("summary") or sheet_names[0]
                             try:
+                                # 适配 Summary 从第 7 行（索引 6）开始作为表头的结构
                                 df_sum = excel_file.parse(sum_sheet, header=6)
                                 df_sum.columns = [str(c).strip() for c in df_sum.columns]
                                 filtered_sum = df_sum[df_sum.apply(match_any_name_in_row, axis=1)]
+                                
                                 if filtered_sum.empty:
                                     df_sum_raw = excel_file.parse(sum_sheet)
                                     df_sum_raw.columns = [str(c).strip() for c in df_sum_raw.columns]
@@ -274,11 +271,12 @@ else:
                         with tab_picking:
                             st.markdown(f"### Picking Records ({standard_name})")
                             pick_sheet_name = None
+                            # 完美匹配 "Picking - 名字" 格式
                             for s in sheet_names:
-                                s_clean = s.lower().replace(" ", "").replace("-", "")
-                                if "picking" in s_clean:
+                                s_lower = s.lower()
+                                if "picking" in s_lower:
                                     for name in allowed_names:
-                                        if name.lower().replace(" ", "") in s_clean:
+                                        if name in s_lower:
                                             pick_sheet_name = s
                                             break
                             if not pick_sheet_name:
@@ -294,11 +292,12 @@ else:
                         with tab_putaway:
                             st.markdown(f"### Putaway Records ({standard_name})")
                             put_sheet_name = None
+                            # 完美匹配 "Putaway - 名字" 格式
                             for s in sheet_names:
-                                s_clean = s.lower().replace(" ", "").replace("-", "")
-                                if "putaway" in s_clean:
+                                s_lower = s.lower()
+                                if "putaway" in s_lower:
                                     for name in allowed_names:
-                                        if name.lower().replace(" ", "") in s_clean:
+                                        if name in s_lower:
                                             put_sheet_name = s
                                             break
                             if not put_sheet_name:
@@ -311,6 +310,6 @@ else:
                             else:
                                 st.warning("未找到专属的 Putaway 绩效分页。")
                 else:
-                    st.error(f"无法下载或解析 {selected_month} 的数据文件。请确认 C 列填入的是形如 `https://docs.google.com/uc?export=download&id=...` 的直接下载直链，且该文件已设置为公开共享。")
+                    st.error(f"无法下载或解析 {selected_month} 的数据文件。")
             else:
-                st.warning(f"未找到 **{selected_month}** 对应的文件直链（C列为空）。请前往 Google 表格点击顶部菜单 **「🚀 KPI 智能自动化 -> 🔄 一键提取 B 列直链并填入 C 列」** 补全直链！")
+                st.warning(f"未找到 **{selected_month}** 对应的文件直链（C列为空），请在 Google 表格中补全 C 列直链。")
