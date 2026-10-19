@@ -34,12 +34,17 @@ def load_config_data(spreadsheet_id):
         return None
 
 def convert_drive_url(url_cell_content):
+    """从 B 列单元格（支持 =HYPERLINK 公式或纯链接）中精准提取下载直链"""
     if not url_cell_content or str(url_cell_content).lower() == "nan":
         return ""
     content = str(url_cell_content).strip()
+    
+    # 解析 Excel / Google Sheets 的 HYPERLINK 公式
     hyperlink_match = re.search(r'HYPERLINK\s*\(\s*["\']([^"\']+)["\']', content, re.IGNORECASE)
     if hyperlink_match:
         content = hyperlink_match.group(1)
+        
+    # 提取 Google Drive 文件 ID 并转为标准直接下载链接
     match = re.search(r'/d/([a-zA-Z0-9_-]+)', content)
     if match:
         file_id = match.group(1)
@@ -58,17 +63,17 @@ st.title("📊 NJ7 Warehouse Performance Portal")
 st.caption("Note: Read-only access to individual performance metrics.")
 st.markdown("---")
 
-# 安全加载数据
 users_df = load_users_realtime(SPREADSHEET_ID)
 config_df = load_config_data(SPREADSHEET_ID)
 
 if users_df is None or users_df.empty:
-    st.error("⚠️ 无法加载账号配置表，请检查 Google 表格中是否存在名为 `KPI checking portal AC` 的分页，且表格权限已公开。")
+    st.error("⚠️ 无法加载账号配置表，请检查 Google 表格中是否存在名为 `KPI checking portal AC` 的分页，且权限已公开。")
 elif config_df is None or config_df.empty:
-    st.error("⚠️ 无法加载月份配置表，请检查 Google 表格中是否存在名为 `KPI` 的分页，且表格权限已公开。")
+    st.error("⚠️ 无法加载月份配置表，请检查 Google 表格中是否存在名为 `KPI` 的分页，且权限已公开。")
 else:
     st.sidebar.header("🔐 Employee Portal")
     
+    # A 列是月份
     valid_config = config_df.dropna(subset=[config_df.columns[0]])
     months = valid_config.iloc[:, 0].dropna().tolist()
     
@@ -77,10 +82,11 @@ else:
     else:
         selected_month = st.sidebar.selectbox("Select Month / 选择月份", months)
         
+        # 【核心修正】精准定位当前选中月份，并读取 B 列（索引 1）的链接内容
         row = valid_config[valid_config.iloc[:, 0] == selected_month]
         link_val = ""
         if not row.empty and len(row.columns) > 1:
-            link_val = str(row.iloc[0, 1]).strip()
+            link_val = str(row.iloc[0, 1]).strip() # 取 B 列
 
         if not st.session_state.logged_in:
             with st.sidebar.form("login_form"):
@@ -297,4 +303,4 @@ else:
                 else:
                     st.error(f"无法下载或解析 {selected_month} 的数据文件。")
             else:
-                st.warning(f"未找到 **{selected_month}** 对应的文件直链，请在 Google 表格的 **KPI 表 B 列** 上传并固化该月份报表。")
+                st.warning(f"未找到 **{selected_month}** 对应的文件直链（B列为空），请在 Google 表格的 **KPI 表 B 列** 上传并固化该月份报表。")
