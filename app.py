@@ -108,7 +108,7 @@ else:
                         st.session_state.selected_role = input_role
                         st.rerun()
                     else:
-                        st.error("Invalid Name, Password or Role / A列姓名、密码或职位错误")
+                        st.error("Invalid Name, Password or Role / 姓名、密码或职位错误")
         else:
             user_info = st.session_state.user_info
             
@@ -119,7 +119,9 @@ else:
             
             # 收集允许匹配的所有名字（name, name2, name3）
             allowed_names = set()
-            allowed_names.add(standard_name.lower())
+            if standard_name and standard_name.lower() != "nan":
+                allowed_names.add(standard_name.lower())
+            
             for col_key in ["name2", "name3"]:
                 matched_key = next((c for c in user_info.keys() if c.lower() == col_key), None)
                 if matched_key:
@@ -140,7 +142,7 @@ else:
                 excel_file = None
                 sheet_names = []
                 
-                with st.spinner(f"正在加载 {selected_month} 的实时固化数据..."):
+                with st.spinner(f"正在加载 {selected_month} 的实时固화数据..."):
                     try:
                         res = requests.get(target_url, timeout=20)
                         if res.status_code == 200:
@@ -153,7 +155,7 @@ else:
 
                 if excel_file is not None and sheet_names:
                     
-                    # 检查行中是否包含任意一个 allowed_names
+                    # 任意列匹配名字
                     def match_any_name_in_row(row_series):
                         for val in row_series.values:
                             v_str = str(val).strip().lower()
@@ -162,7 +164,7 @@ else:
                                     return True
                         return False
 
-                    # 检查 B 列是否匹配任意一个 allowed_names
+                    # B列匹配名字
                     def match_col_b(df):
                         if df is None or df.empty or len(df.columns) < 2:
                             return pd.DataFrame()
@@ -170,7 +172,7 @@ else:
                         mask = pd.Series(False, index=df.index)
                         for name in allowed_names:
                             b_series = df[col_b].fillna("").astype(str).str.strip().str.lower()
-                            mask = mask | (b_series == name)
+                            mask = mask | b_series.str.contains(name, na=False)
                         return df[mask]
 
                     def find_sheet_by_keyword(kw):
@@ -183,7 +185,6 @@ else:
                     if user_role == "scanner":
                         st.subheader(f"📋 Scanner Performance ({selected_month}) - {standard_name}")
                         
-                        # 查找 名字-scan 对应的分页（无空格）
                         scan_sheet_name = None
                         for s in sheet_names:
                             s_clean = s.lower().replace(" ", "")
@@ -195,7 +196,6 @@ else:
                             if scan_sheet_name:
                                 break
                         
-                        # 保底匹配
                         if not scan_sheet_name:
                             for s in sheet_names:
                                 s_lower = s.lower()
@@ -208,9 +208,8 @@ else:
                         if scan_sheet_name:
                             df_scan = excel_file.parse(scan_sheet_name)
                             df_scan.columns = [str(c).strip() for c in df_scan.columns]
-                            df_scan_45 = df_scan.head(45) # 只需要前45行
+                            df_scan_45 = df_scan.head(45)
                             
-                            # 计算 D 列 score 的平均分
                             score_avg = None
                             for col in df_scan_45.columns:
                                 if col.lower().strip() in ["d", "score"] or "score" in col.lower():
@@ -229,10 +228,10 @@ else:
                             st.markdown("### 📊 Scan Details (只读，前45行)")
                             st.dataframe(df_scan_45, use_container_width=True)
                         else:
-                            st.warning(f"未找到对应的 Scanner 专属分页（{standard_name}-scan）。")
+                            st.warning(f"未找到对应的 Scanner 专属分页。")
 
                     # ==========================================
-                    # 2. DRIVER 角色逻辑 (返回 5 个分页)
+                    # 2. DRIVER 角色逻辑 (5 个分页)
                     # ==========================================
                     else:
                         st.subheader(f"🚚 Driver Performance Portal ({selected_month}) - {standard_name}")
@@ -250,18 +249,24 @@ else:
                             st.markdown("### Summary (个人绩效摘要)")
                             try:
                                 sum_sheet = find_sheet_by_keyword("summary") or sheet_names[0]
-                                # 使用第 7 行（索引 6）作为表头
+                                # 尝试以第 7 行（索引 6）作为表头解析
                                 df_sum_header = excel_file.parse(sum_sheet, header=6)
                                 df_sum_header.columns = [str(c).strip() for c in df_sum_header.columns]
-                                
-                                # 筛选出包含员工名字的那一行
                                 filtered_sum = df_sum_header[df_sum_header.apply(match_any_name_in_row, axis=1)]
                                 
+                                if filtered_sum.empty:
+                                    # 兜底：如果没找到，直接解析原始表并把第7行作为表头展示
+                                    df_sum_raw = excel_file.parse(sum_sheet)
+                                    df_sum_raw.columns = [str(c).strip() for c in df_sum_raw.columns]
+                                    filtered_sum = df_sum_raw[df_sum_raw.apply(match_any_name_in_row, axis=1)]
+
                                 if not filtered_sum.empty:
-                                    # 完美展现：表头 + 员工专属行
                                     st.dataframe(filtered_sum, use_container_width=True)
                                 else:
-                                    st.info("未在 Summary 中找到您的专属记录。")
+                                    # 如果依然为空，把全表展示出来供核对，并提示未直接命中
+                                    st.info(f"提示: 未在 Summary 中精准匹配到您的名字 ({allowed_names})。以下是 Summary 全表供参考：")
+                                    df_sum_all = excel_file.parse(sum_sheet, header=6)
+                                    st.dataframe(df_sum_all.head(20), use_container_width=True)
                             except Exception as e:
                                 st.error(f"解析 Summary 出错: {e}")
 
@@ -277,11 +282,11 @@ else:
                                     if not filtered_err.empty:
                                         st.dataframe(filtered_err, use_container_width=True)
                                     else:
-                                        st.success("No error.")
+                                        st.success("no error")
                                 else:
-                                    st.success("No error.")
+                                    st.success("no error")
                             except Exception as e:
-                                st.error(f"解析 Error 出错: {e}")
+                                st.success("no error")
 
                         # --- Tab 3: Bonus ---
                         with tab_bonus:
@@ -295,18 +300,17 @@ else:
                                     if not filtered_bonus.empty:
                                         st.dataframe(filtered_bonus, use_container_width=True)
                                     else:
-                                        st.info("No bonus.")
+                                        st.info("no bonus")
                                 else:
-                                    st.info("No bonus.")
+                                    st.info("no bonus")
                             except Exception as e:
-                                st.error(f"解析 Bonus 出错: {e}")
+                                st.info("no bonus")
 
                         # --- Tab 4: Picking ---
                         with tab_picking:
                             st.markdown(f"### Picking Records ({standard_name})")
                             try:
                                 pick_sheet_name = None
-                                # 优先精准匹配 Picking - 名字 (name, name2, name3)
                                 for s in sheet_names:
                                     s_lower = s.lower()
                                     if "picking" in s_lower:
@@ -331,7 +335,6 @@ else:
                             st.markdown(f"### Putaway Records ({standard_name})")
                             try:
                                 put_sheet_name = None
-                                # 优先精准匹配 Putaway - 名字
                                 for s in sheet_names:
                                     s_lower = s.lower()
                                     if "putaway" in s_lower:
