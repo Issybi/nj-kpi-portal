@@ -2,7 +2,6 @@ import io
 import requests
 import pandas as pd
 import streamlit as st
-import openpyxl
 
 # 页面基本设置
 st.set_page_config(
@@ -13,61 +12,32 @@ st.set_page_config(
 )
 
 # Google Sheet 链接
-PORTAL_SHEET_URL = "https://docs.google.com/spreadsheets/d/1NOLL3GNkIzBIYHIEwV6D55kJ6vsixkSBFj0LVjuTkvI/edit?usp=sharing"
+SPREADSHEET_ID = "1NOLL3GNkIzBIYHIEwV6D55kJ6vsixkSBFj0LVjuTkvI"
 
 
 @st.cache_data(ttl=0)
 def load_portal_data():
-  """实时从 Google Sheet AC 分页读取登录账号、密码和职位映射表"""
+  """实时从 Google Sheet 读取 AC 分页的账号密码数据"""
   try:
-    csv_url = PORTAL_SHEET_URL.replace("/edit?usp=sharing", "/export?format=csv")
+    # 使用 Google Visualization API 直接获取指定 sheet (AC) 的 CSV，极其稳定
+    csv_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=AC"
     df = pd.read_csv(csv_url)
     return df
   except Exception as e:
-    st.error(f"Failed to load portal configuration: {e}")
+    st.error(f"Failed to load AC portal sheet: {e}")
     return pd.DataFrame()
 
 
 @st.cache_data(ttl=0)
-def load_kpi_list():
-  """读取 KPI 分页获取月份及对应下载链接"""
+def load_kpi_portal_list():
+  """实时从 Google Sheet 读取 KPI 分页的月份及下载链接"""
   try:
-    # 默认读取名为 KPI 的分页 (gid 需要根据实际情况，通常通过 csv export 获取)
-    csv_url = (
-        PORTAL_SHEET_URL.replace("/edit?usp=sharing", "/export?format=csv")
-        + "&gid=0"
-    )
-    # 如果 KPI 分页不是第一个，可以通过指定 sheet 名读取
-    # 为稳妥起见，我们直接用 pandas 读取整个 gsheet 的 excel 或通过 gspread，
-    # 或者直接读取公开的 csv 对应 sheet。这里使用 gsheet 导出的标准 csv 链接：
-    excel_export_url = PORTAL_SHEET_URL.replace(
-        "/edit?usp=sharing", "/export?format=xlsx"
-    )
-    xls = pd.ExcelFile(excel_export_url)
-    # 查找包含 Month_Label 或 KPI 的分页
-    for sheet in xls.sheet_names:
-      temp_df = pd.read_excel(xls, sheet_name=sheet)
-      if "Month_Label" in temp_df.columns or "OneDrive_Direct_Link" in temp_df.columns:
-        return temp_df
-    # 如果没找到，默认返回第一页
-    return pd.read_excel(xls, sheet_name=0)
+    csv_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=KPI"
+    df = pd.read_csv(csv_url)
+    return df
   except Exception as e:
-    # 备用硬编码或提示
+    st.error(f"Failed to load KPI sheet list: {e}")
     return pd.DataFrame()
-
-
-def match_user_name(target_name, row_b, row_name2, row_name3):
-  """使用 name, name2, name3 同时匹配，满足其中一个即可"""
-  if pd.isna(target_name):
-    return False
-  target_str = str(target_name).strip().lower()
-
-  for val in [row_b, row_name2, row_name3]:
-    if pd.notna(val):
-      if str(val).strip().lower() == target_str:
-        return st.write or True  # 匹配成功
-        return True
-  return False
 
 
 # 初始化 Session State
@@ -93,13 +63,10 @@ if not st.session_state.logged_in:
       if portal_df.empty:
         st.error(
             "Portal data could not be loaded. Please check Google Sheet"
-            " permissions."
+            " permissions or sheet name ('AC')."
         )
       else:
-        # 查找匹配的账号与密码 (A列 name, B列 pw, E列 type)
-        # 清理列名空格
         portal_df.columns = portal_df.columns.astype(str).str.strip()
-
         matched = False
         user_row = None
 
@@ -110,7 +77,7 @@ if not st.session_state.logged_in:
 
           if (
               name_val.lower() == input_user.strip().lower()
-              and pw_val == input_pw.strip()
+              and str(pw_val) == str(input_pw).strip()
               and type_val == input_role.strip().lower()
           ):
             matched = True
@@ -121,7 +88,6 @@ if not st.session_state.logged_in:
           st.session_state.logged_in = True
           st.session_state.username = str(user_row.get("name"))
           st.session_state.role = input_role.lower()
-          # 保存备用匹配名
           st.session_state.name2 = user_row.get("name2", None)
           st.session_state.name3 = user_row.get("name3", None)
           st.rerun()
@@ -129,7 +95,7 @@ if not st.session_state.logged_in:
           st.error("Invalid Account, Password, or Position.")
 
 else:
-  # ==================== 登入后的 KPI 查询主界面 ====================
+  # ==================== 登录后的 KPI 查询主界面 ====================
   st.sidebar.title("Portal Menu")
   st.sidebar.write(f"**User:** {st.session_state.username}")
   st.sidebar.write(f"**Position:** {st.session_state.role.capitalize()}")
@@ -142,16 +108,15 @@ else:
 
   st.title("Employee KPI Checking Portal")
 
-  # 加载月份与文件列表
-  kpi_list_df = load_kpi_list()
+  # 加载 KPI 分页数据
+  kpi_list_df = load_kpi_portal_list()
 
-  if kpi_list_df.empty or "OneDrive_Direct_Link" not in kpi_list_df.columns:
+  if kpi_list_df.empty or "Month_Label" not in kpi_list_df.columns:
     st.error(
-        "Could not load KPI monthly links from the Google Sheet. Please check"
-        " the sheet format."
+        "Could not load KPI monthly links from the 'KPI' sheet. Please check"
+        " sheet format."
     )
   else:
-    # 提取有链接的月份
     valid_months = kpi_list_df.dropna(subset=["OneDrive_Direct_Link"])
     month_options = valid_months["Month_Label"].tolist()
 
@@ -160,17 +125,15 @@ else:
     else:
       selected_month = st.selectbox("Select Month to View KPI", month_options)
 
-      # 获取对应月份的下载链接
       row_data = valid_months[
           valid_months["Month_Label"] == selected_month
       ].iloc[0]
       file_url = row_data["OneDrive_Direct_Link"]
 
-      # 加载对应的 Excel 文件
+
       @st.cache_data
       def load_monthly_excel(url):
         try:
-          # 处理 google drive / onedrive 直链
           if "export=download" not in url and "drive.google.com" in url:
             url = url.replace("uc?id=", "uc?export=download&id=")
           res = requests.get(url)
@@ -178,12 +141,14 @@ else:
         except Exception as e:
           return None
 
+
       with st.spinner(f"Loading KPI data for {selected_month}..."):
         excel_file = load_monthly_excel(file_url)
 
       if excel_file is None:
         st.error(
             f"Failed to download or read the Excel file for {selected_month}."
+            " Please check the link."
         )
       else:
         current_user = st.session_state.username.strip()
@@ -206,9 +171,7 @@ else:
 
         # ==================== 角色 1: SCANNER ====================
         if st.session_state.role == "scanner":
-          # 返回名字-scan的分页（无空格）
           sheet_name = f"{current_user}-scan"
-          # 尝试不区分大小写查找分页
           matched_sheet = None
           for s in excel_file.sheet_names:
             if s.strip().lower() == sheet_name.lower():
@@ -219,12 +182,9 @@ else:
             df_scan = pd.read_excel(excel_file, sheet_name=matched_sheet)
             st.subheader(f"Scanner KPI Report - {current_user}")
 
-            # 只需要显示到第 45 行
             if len(df_scan) > 45:
               df_scan = df_scan.iloc[:45]
 
-            # 计算 D 列 (score) 的平均分显示
-            # 自动寻找包含 score 或类似名称的列，或者直接按索引 D列 (第4列, index 3)
             score_col = None
             for col in df_scan.columns:
               if "score" in str(col).lower():
@@ -256,23 +216,18 @@ else:
               f"Putaway - {current_user}",
           ])
 
-          # --- Tab 1: Summary ---
           with tab1:
             st.subheader("Summary Report")
             if "Summary" in excel_file.sheet_names:
               df_sum = pd.read_excel(
                   excel_file, sheet_name="Summary", header=None
               )
-              # 第 7 行是标题 (index 6)，从第 8 行开始是数据 (index 7 onwards)
               if len(df_sum) >= 7:
-                header_row = df_sum.iloc[6].values  # 第7行
-                data_rows = df_sum.iloc[7:]  # 从第8行开始
-
-                # 构建带正确表头的 DataFrame
+                header_row = df_sum.iloc[6].values
+                data_rows = df_sum.iloc[7:]
                 df_sum_clean = pd.DataFrame(
                     data_rows.values, columns=header_row
                 )
-                # 寻找 Name 列进行过滤
                 name_col_sum = None
                 for col in df_sum_clean.columns:
                   if "name" in str(col).lower():
@@ -280,7 +235,6 @@ else:
                     break
 
                 if name_col_sum:
-                  # 过滤匹配名字行
                   user_summary = df_sum_clean[
                       df_sum_clean[name_col_sum]
                       .astype(str)
@@ -288,28 +242,19 @@ else:
                       .str.lower()
                       .isin(match_names)
                   ]
-                  # 组合表头行 + 用户行显示
-                  header_display = pd.DataFrame(
-                      [header_row], columns=header_row
-                  )
                   if not user_summary.empty:
                     st.dataframe(user_summary, use_container_width=True)
                   else:
-                    st.info(
-                        "No summary record found matching your name in A8+"
-                        " range."
-                    )
+                    st.info("No summary record found matching your name.")
                 else:
-                  st.warning("Summary sheet structure mismatch: Name column not found.")
+                  st.warning("Summary sheet structure mismatch.")
             else:
-              st.warning("Summary sheet not found in the workbook.")
+              st.warning("Summary sheet not found.")
 
-          # --- Tab 2: Error-OtherTasks ---
           with tab2:
             st.subheader("Error & Other Tasks")
             if "Error-OtherTasks" in excel_file.sheet_names:
               df_err = pd.read_excel(excel_file, sheet_name="Error-OtherTasks")
-              # 寻找 Name 列
               name_col_err = None
               for col in df_err.columns:
                 if "name" in str(col).lower():
@@ -329,11 +274,10 @@ else:
                 else:
                   st.success("no error")
               else:
-                st.warning("Error-OtherTasks sheet missing Name column.")
+                st.success("no error")
             else:
               st.success("no error")
 
-          # --- Tab 3: Bonus ---
           with tab3:
             st.subheader("Bonus Record")
             if "Bonus" in excel_file.sheet_names:
@@ -361,18 +305,16 @@ else:
             else:
               st.info("no bonus")
 
-          # --- Tab 4: Picking (带空格，对应 B1) ---
           with tab4:
             st.subheader("Picking Details")
             picking_sheet = None
             for s in excel_file.sheet_names:
               if s.lower().startswith("picking -"):
-                # 读取 B1 判断名字是否匹配
                 try:
                   temp_df = pd.read_excel(
                       excel_file, sheet_name=s, header=None
                   )
-                  b1_val = str(temp_df.iloc[0, 1]).strip().lower()  # B1 单元格
+                  b1_val = str(temp_df.iloc[0, 1]).strip().lower()
                   if b1_val in match_names or any(
                       m in b1_val for m in match_names
                   ):
@@ -387,7 +329,6 @@ else:
             else:
               st.warning("No Picking sheet matched for your profile.")
 
-          # --- Tab 5: Putaway (带空格，对应 B1) ---
           with tab5:
             st.subheader("Putaway Details")
             putaway_sheet = None
@@ -397,7 +338,7 @@ else:
                   temp_df = pd.read_excel(
                       excel_file, sheet_name=s, header=None
                   )
-                  b1_val = str(temp_df.iloc[0, 1]).strip().lower()  # B1 单元格
+                  b1_val = str(temp_df.iloc[0, 1]).strip().lower()
                   if b1_val in match_names or any(
                       m in b1_val for m in match_names
                   ):
