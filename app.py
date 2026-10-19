@@ -18,9 +18,10 @@ def load_users_realtime(spreadsheet_id):
     try:
         url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/gviz/tq?tqx=out:csv&sheet=KPI%20checking%20portal%20AC"
         df = pd.read_csv(url, dtype=str)
-        df.columns = [str(c).strip() for c in df.columns]
+        df.columns = [str(c).strip().lower() for c in df.columns] # 转小写去空格，防止匹配失败
         return df
     except Exception as e:
+        st.error(f"加载用户表异常: {e}")
         return None
 
 @st.cache_data(ttl=10)
@@ -31,15 +32,13 @@ def load_config_data(spreadsheet_id):
         df.columns = [str(c).strip() for c in df.columns]
         return df
     except Exception as e:
+        st.error(f"加载配置表异常: {e}")
         return None
 
 def convert_drive_url(url_cell_content):
-    """提取 Google Drive 文件 ID 并转换为直接下载链接"""
     if not url_cell_content or str(url_cell_content).lower() == "nan":
         return ""
     content = str(url_cell_content).strip()
-    
-    # 提取 Google Drive 文件 ID 并转为直接下载直链格式
     match = re.search(r'/d/([a-zA-Z0-9_-]+)', content)
     if match:
         file_id = match.group(1)
@@ -62,13 +61,12 @@ users_df = load_users_realtime(SPREADSHEET_ID)
 config_df = load_config_data(SPREADSHEET_ID)
 
 if users_df is None or users_df.empty:
-    st.error("⚠️ 无法加载账号配置表，请检查 Google 表格中是否存在名为 `KPI checking portal AC` 的分页，且权限已公开。")
+    st.error("⚠️ 无法加载账号配置表 (`KPI checking portal AC`)，请检查表格名称及公开共享权限。")
 elif config_df is None or config_df.empty:
-    st.error("⚠️ 无法加载月份配置表，请检查 Google 表格中是否存在名为 `KPI` 的分页，且权限已公开。")
+    st.error("⚠️ 无法加载月份配置表 (`KPI`)，请检查表格名称及公开共享权限。")
 else:
     st.sidebar.header("🔐 Employee Portal")
     
-    # A 列是月份
     valid_config = config_df.dropna(subset=[config_df.columns[0]])
     months = valid_config.iloc[:, 0].dropna().tolist()
     
@@ -77,11 +75,11 @@ else:
     else:
         selected_month = st.sidebar.selectbox("Select Month / 选择月份", months)
         
-        # 【核心修正】精准定位当前选中月份，并读取 C 列（索引 2）的原始直链内容
-        row = valid_config[valid_config.iloc[:, 0] == selected_month]
+        # 精准定位当前选中月份，读取 C 列（索引 2）
+        row = valid_config[valid_config.iloc[:, 0].astype(str).str.strip() == str(selected_month).strip()]
         link_val = ""
         if not row.empty and len(row.columns) > 2:
-            link_val = str(row.iloc[0, 2]).strip() # 取 C 列原始直链
+            link_val = str(row.iloc[0, 2]).strip()
 
         if not st.session_state.logged_in:
             with st.sidebar.form("login_form"):
@@ -92,10 +90,15 @@ else:
                 submit_btn = st.form_submit_button("Login / 登录")
                 
                 if submit_btn:
+                    # 宽松匹配登录信息
+                    name_col = "name" if "name" in users_df.columns else users_df.columns[0]
+                    pw_col = "pw" if "pw" in users_df.columns else users_df.columns[1]
+                    type_col = "type" if "type" in users_df.columns else users_df.columns[2]
+                    
                     match_rows = users_df[
-                        (users_df["name"].fillna("").astype(str).str.strip().str.lower() == input_name.lower()) &
-                        (users_df["pw"].fillna("").astype(str).str.strip() == input_pw) &
-                        (users_df["type"].fillna("").astype(str).str.strip().str.lower() == input_role.lower())
+                        (users_df[name_col].fillna("").astype(str).str.strip().str.lower() == input_name.lower()) &
+                        (users_df[pw_col].fillna("").astype(str).str.strip() == input_pw) &
+                        (users_df[type_col].fillna("").astype(str).str.strip().str.lower() == input_role.lower())
                     ]
                     
                     if not match_rows.empty:
@@ -108,13 +111,16 @@ else:
                         st.error("Invalid Name, Password or Role / 姓名、密码或职位错误")
         else:
             user_info = st.session_state.user_info
-            standard_name = str(user_info.get("name", "")).strip()
-            user_role = st.session_state.get("selected_role", str(user_info.get("type", "driver")).strip()).lower()
+            # 兼容不同列名大小写
+            std_name_key = next((c for c in user_info.keys() if c.lower() == "name"), list(user_info.keys())[0])
+            standard_name = str(user_info.get(std_name_key, "")).strip()
+            user_role = st.session_state.get("selected_role", "driver").lower()
             
             allowed_names = set()
             for col_key in ["name", "name2", "name3"]:
-                if col_key in user_info:
-                    val = str(user_info.get(col_key, "")).strip().lower()
+                matched_key = next((c for c in user_info.keys() if c.lower() == col_key), None)
+                if matched_key:
+                    val = str(user_info.get(matched_key, "")).strip().lower()
                     if val and val != "nan":
                         allowed_names.add(val)
             if not allowed_names:
@@ -135,7 +141,7 @@ else:
                 
                 with st.spinner(f"正在加载 {selected_month} 的实时固化数据..."):
                     try:
-                        res = requests.get(target_url, timeout=15)
+                        res = requests.get(target_url, timeout=20)
                         if res.status_code == 200:
                             excel_file = pd.ExcelFile(io.BytesIO(res.content))
                             sheet_names = excel_file.sheet_names
@@ -166,17 +172,6 @@ else:
                     def find_sheet_by_keyword(kw):
                         matches = [s for s in sheet_names if kw.lower() in s.lower()]
                         return matches[0] if matches else None
-
-                    def find_driver_sheet(prefix):
-                        for s in sheet_names:
-                            s_clean = s.lower().replace(" ", "").replace("-", "")
-                            prefix_clean = prefix.lower().replace(" ", "").replace("-", "")
-                            if prefix_clean in s_clean:
-                                for name in allowed_names:
-                                    name_clean = name.lower().replace(" ", "")
-                                    if name_clean in s_clean:
-                                        return s
-                        return None
 
                     # 1. SCANNER 逻辑
                     if user_role == "scanner":
@@ -278,7 +273,17 @@ else:
 
                         with tab_picking:
                             st.markdown(f"### Picking Records ({standard_name})")
-                            pick_sheet_name = find_driver_sheet("picking")
+                            pick_sheet_name = None
+                            for s in sheet_names:
+                                s_clean = s.lower().replace(" ", "").replace("-", "")
+                                if "picking" in s_clean:
+                                    for name in allowed_names:
+                                        if name.lower().replace(" ", "") in s_clean:
+                                            pick_sheet_name = s
+                                            break
+                            if not pick_sheet_name:
+                                pick_sheet_name = find_sheet_by_keyword("picking")
+
                             if pick_sheet_name:
                                 df_pick = excel_file.parse(pick_sheet_name)
                                 df_pick.columns = [str(c).strip() for c in df_pick.columns]
@@ -288,7 +293,17 @@ else:
 
                         with tab_putaway:
                             st.markdown(f"### Putaway Records ({standard_name})")
-                            put_sheet_name = find_driver_sheet("putaway")
+                            put_sheet_name = None
+                            for s in sheet_names:
+                                s_clean = s.lower().replace(" ", "").replace("-", "")
+                                if "putaway" in s_clean:
+                                    for name in allowed_names:
+                                        if name.lower().replace(" ", "") in s_clean:
+                                            put_sheet_name = s
+                                            break
+                            if not put_sheet_name:
+                                put_sheet_name = find_sheet_by_keyword("putaway")
+
                             if put_sheet_name:
                                 df_put = excel_file.parse(put_sheet_name)
                                 df_put.columns = [str(c).strip() for c in df_put.columns]
@@ -296,6 +311,6 @@ else:
                             else:
                                 st.warning("未找到专属的 Putaway 绩效分页。")
                 else:
-                    st.error(f"无法下载或解析 {selected_month} 的数据文件。")
+                    st.error(f"无法下载或解析 {selected_month} 的数据文件。请确认 C 列填入的是形如 `https://docs.google.com/uc?export=download&id=...` 的直接下载直链，且该文件已设置为公开共享。")
             else:
-                st.warning(f"未找到 **{selected_month}** 对应的文件直链（C列为空），请在 Google 表格的 **KPI 表** 重新上传并固化该月份报表。")
+                st.warning(f"未找到 **{selected_month}** 对应的文件直链（C列为空）。请前往 Google 表格点击顶部菜单 **「🚀 KPI 智能自动化 -> 🔄 一键提取 B 列直链并填入 C 列」** 补全直链！")
