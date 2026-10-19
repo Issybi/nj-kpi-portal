@@ -4,7 +4,6 @@ import requests
 import io
 import re
 
-# 页面基本设置
 st.set_page_config(
     page_title="NJ7 Warehouse Performance Portal",
     page_icon="📊",
@@ -71,10 +70,18 @@ else:
     else:
         selected_month = st.sidebar.selectbox("Select Month / 选择月份", months)
         
-        row = valid_config[valid_config.iloc[:, 0].astype(str).str.strip() == str(selected_month).strip()]
+        # 【核心修复】模糊匹配当前选中月份所在的行，直接提取 C 列（索引 2）直链
         link_val = ""
-        if not row.empty and len(row.columns) > 2:
-            link_val = str(row.iloc[0, 2]).strip()
+        for idx, val in enumerate(valid_config.iloc[:, 0].astype(str)):
+            if str(selected_month).strip() in val.strip():
+                if len(valid_config.columns) > 2:
+                    link_val = str(valid_config.iloc[idx, 2]).strip()
+                break
+        
+        # 如果还没找到，默认取配置表的最后一行（即最新的一行）直链作为保底
+        if (not link_val or link_val.lower() == "nan") and not valid_config.empty:
+            if len(valid_config.columns) > 2:
+                link_val = str(valid_config.iloc[-1, 2]).strip()
 
         if not st.session_state.logged_in:
             with st.sidebar.form("login_form"):
@@ -152,6 +159,16 @@ else:
                                     return True
                         return False
 
+                    def match_col_b(df):
+                        if df is None or df.empty or len(df.columns) < 2:
+                            return pd.DataFrame()
+                        col_b = df.columns[1]
+                        mask = pd.Series(False, index=df.index)
+                        for name in allowed_names:
+                            b_series = df[col_b].fillna("").astype(str).str.strip().str.lower()
+                            mask = mask | (b_series == name)
+                        return df[mask]
+
                     def find_sheet_by_keyword(kw):
                         matches = [s for s in sheet_names if kw.lower() in s.lower()]
                         return matches[0] if matches else None
@@ -159,13 +176,52 @@ else:
                     # 1. SCANNER 逻辑
                     if user_role == "scanner":
                         st.subheader(f"📋 Scanner Performance ({selected_month}) - {standard_name}")
-                        # ... (Scanner 逻辑保持不变)
+                        scan_sheet_name = None
+                        for s in sheet_names:
+                            s_clean = s.lower().replace(" ", "").replace("-", "")
+                            if "scan" in s_clean and s_clean != "scantime":
+                                for name in allowed_names:
+                                    if name.lower().replace(" ", "") in s_clean:
+                                        scan_sheet_name = s
+                                        break
+                        if not scan_sheet_name:
+                            scan_sheet_name = find_sheet_by_keyword("scan")
+                            
+                        if scan_sheet_name:
+                            df_scan = excel_file.parse(scan_sheet_name)
+                            df_scan.columns = [str(c).strip() for c in df_scan.columns]
+                            df_scan_45 = df_scan.head(45)
+                            
+                            score_avg = None
+                            for col in df_scan_45.columns:
+                                if col.lower().strip() in ["d", "score"] or "score" in col.lower():
+                                    numeric_vals = pd.to_numeric(df_scan_45[col], errors='coerce')
+                                    if not numeric_vals.dropna().empty:
+                                        score_avg = numeric_vals.mean()
+                                        break
+                            if score_avg is None and len(df_scan_45.columns) > 3:
+                                numeric_vals = pd.to_numeric(df_scan_45.iloc[:, 3], errors='coerce')
+                                if not numeric_vals.dropna().empty:
+                                    score_avg = numeric_vals.mean()
+
+                            if score_avg is not None:
+                                st.metric(label="⭐ Average Score (D列平均分)", value=f"{score_avg:.2f}")
+
+                            st.markdown("### 📊 Scan Details (只读，前45行)")
+                            st.dataframe(df_scan_45, use_container_width=True)
+                        else:
+                            st.warning("未找到对应的 Scanner 分页。")
+
                     # 2. DRIVER 逻辑
                     else:
                         st.subheader(f"🚚 Driver Performance Portal ({selected_month}) - {standard_name}")
                         
                         tab_summary, tab_error, tab_bonus, tab_picking, tab_putaway = st.tabs([
-                            "1. Summary", "2. Error-OtherTasks", "3. Bonus", "4. Picking", "5. Putaway"
+                            "1. Summary", 
+                            "2. Error-OtherTasks", 
+                            "3. Bonus", 
+                            "4. Picking", 
+                            "5. Putaway"
                         ])
 
                         with tab_summary:
@@ -185,20 +241,24 @@ else:
                                 else:
                                     st.info("未在 Summary 中找到您的专属记录。")
                             except Exception as e:
-                                st.error(f"Summary 渲染出错: {e}")
+                                st.error(f"解析 Summary 出错: {e}")
 
                         with tab_error:
                             st.markdown("### Error & Other Tasks")
                             try:
-                                err_sheet = find_sheet_by_keyword("error")
+                                err_sheet = find_sheet_by_keyword("error") or find_sheet_by_keyword("other")
                                 if err_sheet:
                                     df_err = excel_file.parse(err_sheet)
                                     df_err.columns = [str(c).strip() for c in df_err.columns]
-                                    st.dataframe(df_err, use_container_width=True)
+                                    filtered_err = match_col_b(df_err)
+                                    if not filtered_err.empty:
+                                        st.dataframe(filtered_err, use_container_width=True)
+                                    else:
+                                        st.success("No error. (没有查到您的错误记录)")
                                 else:
-                                    st.success("No error table found.")
+                                    st.success("No error. (没有错误记录表)")
                             except Exception as e:
-                                st.error(f"Error 渲染出错: {e}")
+                                st.error(f"解析 Error 出错: {e}")
 
                         with tab_bonus:
                             st.markdown("### Bonus Details")
@@ -207,11 +267,15 @@ else:
                                 if bonus_sheet:
                                     df_bonus = excel_file.parse(bonus_sheet)
                                     df_bonus.columns = [str(c).strip() for c in df_bonus.columns]
-                                    st.dataframe(df_bonus, use_container_width=True)
+                                    filtered_bonus = match_col_b(df_bonus)
+                                    if not filtered_bonus.empty:
+                                        st.dataframe(filtered_bonus, use_container_width=True)
+                                    else:
+                                        st.info("No bonus. (没有查到您的奖金记录)")
                                 else:
-                                    st.info("No bonus table found.")
+                                    st.info("No bonus. (没有奖金记录表)")
                             except Exception as e:
-                                st.error(f"Bonus 渲染出错: {e}")
+                                st.error(f"解析 Bonus 出错: {e}")
 
                         with tab_picking:
                             st.markdown(f"### Picking Records ({standard_name})")
@@ -234,7 +298,7 @@ else:
                                 else:
                                     st.warning("未找到专属的 Picking 绩效分页。")
                             except Exception as e:
-                                st.error(f"Picking 渲染出错: {e}")
+                                st.error(f"解析 Picking 出错: {e}")
 
                         with tab_putaway:
                             st.markdown(f"### Putaway Records ({standard_name})")
@@ -257,7 +321,7 @@ else:
                                 else:
                                     st.warning("未找到专属的 Putaway 绩效分页。")
                             except Exception as e:
-                                st.error(f"Putaway 渲染出错: {e}")
+                                st.error(f"解析 Putaway 出错: {e}")
                 else:
                     st.error(f"无法下载或解析 {selected_month} 的数据文件。")
             else:
