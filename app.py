@@ -242,50 +242,76 @@ else:
                 break
 
             if matched_sheet:
-              # 先不设 header 读取整张原始表，用于精准定位含有 Score 的表头行
+              # 不设 header 读取整张原始表
               df_raw = pd.read_excel(
                   excel_file, sheet_name=matched_sheet, header=None
               )
 
               st.subheader(f"Scanner KPI Report - {current_user}")
 
-              # 自动查找哪一行包含 'Score' 作为表头
+              # 精准寻找包含 'Date' 的那一行作为表头
               header_idx = None
               for idx, row in df_raw.iterrows():
                 row_str_vals = [str(val).strip().lower() for val in row.values]
-                if "score" in row_str_vals:
+                if "date" in row_str_vals:
                   header_idx = idx
                   break
 
               if header_idx is not None:
-                # 重新以找到的行作为表头
-                headers = df_raw.iloc[header_idx].values
-                df_scan = df_raw.iloc[header_idx + 1 :].copy()
-                df_scan.columns = headers
+                headers = list(df_raw.iloc[header_idx].values)
 
-                # 清理空列名
-                df_scan = df_scan.loc[
-                    :, ~pd.isna(df_scan.columns) & (df_scan.columns != "nan")
+                # 强制规范化前四列的名称，确保 A(日期)、B(扫描数目)、C(花费时间)、D(分数) 完美对应
+                if len(headers) > 0:
+                  headers[0] = "Date"
+                if len(headers) > 1:
+                  headers[1] = "Scan Quantity (B)"
+                if len(headers) > 2:
+                  headers[2] = "Time Spent (C)"
+                if len(headers) > 3:
+                  headers[3] = "Score (D)"
+
+                cleaned_headers = []
+                for i, h in enumerate(headers):
+                  h_str = str(h).strip()
+                  if h_str == "" or h_str.lower() == "nan":
+                    cleaned_headers.append(f"Column_{i+1}")
+                  else:
+                    cleaned_headers.append(h_str)
+
+                df_scan = df_raw.iloc[header_idx + 1 :].copy()
+                df_scan.columns = cleaned_headers
+
+                # 寻找日期列
+                date_col = cleaned_headers[0]
+
+                # 过滤掉日期为空或为 0 的无效行
+                df_scan = df_scan[
+                    df_scan[date_col].notna()
+                    & (df_scan[date_col].astype(str).str.strip() != "")
+                    & (df_scan[date_col].astype(str).str.strip() != "0")
                 ]
 
-                # 限制显示前 45 行
+                # 最多取前 45 行有效数据
                 if len(df_scan) > 45:
                   df_scan = df_scan.iloc[:45]
 
-                # 计算 Score 列的平均分
-                score_col = None
-                for col in df_scan.columns:
-                  if "score" in str(col).strip().lower():
-                    score_col = col
-                    break
+                # 精准计算 Score (第4列 / D列) 的平均分
+                score_col = (
+                    cleaned_headers[3] if len(cleaned_headers) > 3 else None
+                )
+                # 备用保险：如果第4列名字不对，再按关键词搜索
+                if not score_col or "score" not in score_col.lower():
+                  for col in df_scan.columns:
+                    if "score" in str(col).strip().lower():
+                      score_col = col
+                      break
 
                 if score_col is not None:
                   avg_score = pd.to_numeric(
                       df_scan[score_col], errors="coerce"
                   ).mean()
-                  # 在指定位置展示大卡片平均分
                   st.metric(
-                      label="📊 Average Score (Score Column)",
+                      label="📊 Average Score (D Column - Score)",
                       value=f"{avg_score:.2f}"
                       if pd.notna(avg_score)
                       else "N/A",
@@ -293,7 +319,6 @@ else:
 
                 st.dataframe(df_scan, use_container_width=True)
               else:
-                # 降级兜底方案：如果没有找到包含 Score 的行，直接展示原表前45行
                 if len(df_raw) > 45:
                   df_raw = df_raw.iloc[:45]
                 st.dataframe(df_raw, use_container_width=True)
