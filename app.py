@@ -72,7 +72,6 @@ if not st.session_state.logged_in:
       else:
         portal_df.columns = portal_df.columns.astype(str).str.strip()
 
-        # 查找该账号匹配的所有行（支持同一个 Account 对应多个 Role 的情况）
         matched_rows = []
         for idx, row in portal_df.iterrows():
           acc_val = str(row.get("Account", "")).strip()
@@ -89,7 +88,6 @@ if not st.session_state.logged_in:
           st.session_state.name2 = matched_rows[0].get("Name2", None)
           st.session_state.name3 = matched_rows[0].get("Name3", None)
 
-          # 提取该账号拥有的所有角色列表（转为小写）
           roles = [
               str(r.get("Role", "")).strip().lower()
               for r in matched_rows
@@ -97,7 +95,6 @@ if not st.session_state.logged_in:
           ]
           st.session_state.available_roles = list(set(roles))
 
-          # 如果有多个角色，默认选第一个，后续可以在侧边栏切换
           if st.session_state.available_roles:
             st.session_state.role = st.session_state.available_roles[0]
 
@@ -110,7 +107,6 @@ else:
   st.sidebar.title("Portal Menu")
   st.sidebar.write(f"**User:** {st.session_state.username}")
 
-  # 如果该账号拥有多个职位，在侧边栏提供实时切换 Role 的单选框
   if len(st.session_state.available_roles) > 1:
     current_index = 0
     if st.session_state.role in st.session_state.available_roles:
@@ -141,7 +137,6 @@ else:
 
   st.title("Employee KPI Checking Portal")
 
-  # 加载 KPI 分页数据
   kpi_list_df = load_kpi_portal_list()
 
   if kpi_list_df.empty or "Month_Label" not in kpi_list_df.columns:
@@ -174,7 +169,6 @@ else:
 
 
         def load_monthly_excel(url):
-          """下载并解析 Excel 文件"""
           try:
             if not url.startswith("http"):
               st.error(
@@ -248,28 +242,62 @@ else:
                 break
 
             if matched_sheet:
-              df_scan = pd.read_excel(excel_file, sheet_name=matched_sheet)
+              # 先不设 header 读取整张原始表，用于精准定位含有 Score 的表头行
+              df_raw = pd.read_excel(
+                  excel_file, sheet_name=matched_sheet, header=None
+              )
+
               st.subheader(f"Scanner KPI Report - {current_user}")
 
-              if len(df_scan) > 45:
-                df_scan = df_scan.iloc[:45]
-
-              score_col = None
-              for col in df_scan.columns:
-                if "score" in str(col).lower():
-                  score_col = col
+              # 自动查找哪一行包含 'Score' 作为表头
+              header_idx = None
+              for idx, row in df_raw.iterrows():
+                row_str_vals = [str(val).strip().lower() for val in row.values]
+                if "score" in row_str_vals:
+                  header_idx = idx
                   break
 
-              if score_col is not None:
-                avg_score = pd.to_numeric(
-                    df_scan[score_col], errors="coerce"
-                ).mean()
-                st.metric(
-                    label="Average Score (D Column)",
-                    value=f"{avg_score:.2f}" if pd.notna(avg_score) else "N/A",
-                )
+              if header_idx is not None:
+                # 重新以找到的行作为表头
+                headers = df_raw.iloc[header_idx].values
+                df_scan = df_raw.iloc[header_idx + 1 :].copy()
+                df_scan.columns = headers
 
-              st.dataframe(df_scan, use_container_width=True)
+                # 清理空列名
+                df_scan = df_scan.loc[
+                    :, ~pd.isna(df_scan.columns) & (df_scan.columns != "nan")
+                ]
+
+                # 限制显示前 45 行
+                if len(df_scan) > 45:
+                  df_scan = df_scan.iloc[:45]
+
+                # 计算 Score 列的平均分
+                score_col = None
+                for col in df_scan.columns:
+                  if "score" in str(col).strip().lower():
+                    score_col = col
+                    break
+
+                if score_col is not None:
+                  avg_score = pd.to_numeric(
+                      df_scan[score_col], errors="coerce"
+                  ).mean()
+                  # 在指定位置展示大卡片平均分
+                  st.metric(
+                      label="📊 Average Score (Score Column)",
+                      value=f"{avg_score:.2f}"
+                      if pd.notna(avg_score)
+                      else "N/A",
+                  )
+
+                st.dataframe(df_scan, use_container_width=True)
+              else:
+                # 降级兜底方案：如果没有找到包含 Score 的行，直接展示原表前45行
+                if len(df_raw) > 45:
+                  df_raw = df_raw.iloc[:45]
+                st.dataframe(df_raw, use_container_width=True)
+
             else:
               st.warning(
                   f"No scan records found for your account ({sheet_name} not"
