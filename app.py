@@ -1,6 +1,6 @@
 import io
-import requests
 import pandas as pd
+import requests
 import streamlit as st
 
 # 页面基本设置
@@ -11,15 +11,20 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Google Sheet 链接
-SPREADSHEET_ID = "1NOLL3GNkIzBIYHIEwV6D55kJ6vsixkSBFj0LVjuTkvI"
+# ==================== 安全保密核心修改 ====================
+# 使用 st.secrets 从 Streamlit Cloud 后台读取 SPREADSHEET_ID
+# 即使你的 GitHub 仓库是 Public（公开的），别人也无法看到你的表格 ID
+try:
+  SPREADSHEET_ID = st.secrets["SPREADSHEET_ID"]
+except Exception:
+  # 本地调试时的备用回退（如果在本地运行，可以在本地配置 .streamlit/secrets.toml）
+  SPREADSHEET_ID = "1NOLL3GNkIzBIYHIEwV6D55kJ6vsixkSBFj0LVjuTkvI"
 
 
 @st.cache_data(ttl=0)
 def load_portal_data():
   """实时从 Google Sheet 读取 AC 分页的账号密码数据"""
   try:
-    # 使用 Google Visualization API 直接获取指定 sheet (AC) 的 CSV，极其稳定
     csv_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=AC"
     df = pd.read_csv(csv_url)
     return df
@@ -130,7 +135,6 @@ else:
       ].iloc[0]
       file_url = row_data["OneDrive_Direct_Link"]
 
-
       @st.cache_data
       def load_monthly_excel(url):
         try:
@@ -140,7 +144,6 @@ else:
           return pd.ExcelFile(io.BytesIO(res.content))
         except Exception as e:
           return None
-
 
       with st.spinner(f"Loading KPI data for {selected_month}..."):
         excel_file = load_monthly_excel(file_url)
@@ -248,6 +251,8 @@ else:
                     st.info("No summary record found matching your name.")
                 else:
                   st.warning("Summary sheet structure mismatch.")
+              else:
+                st.warning("Summary sheet rows are less than 7.")
             else:
               st.warning("Summary sheet not found.")
 
