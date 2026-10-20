@@ -68,13 +68,11 @@ if not st.session_state.logged_in:
             " permissions or sheet name ('KPI checking portal AC')."
         )
       else:
-        # 清理列名空格
         portal_df.columns = portal_df.columns.astype(str).str.strip()
         matched = False
         user_row = None
 
         for idx, row in portal_df.iterrows():
-          # 适配表格中的 Account, Password, Role 列
           acc_val = str(row.get("Account", "")).strip()
           pw_val = str(row.get("Password", "")).strip()
           role_val = str(row.get("Role", "")).strip().lower()
@@ -121,7 +119,6 @@ else:
         " sheet format."
     )
   else:
-    # 自动寻找包含下载链接的列（兼容 OneDrive_Direct_Link 或 File_URL）
     link_col = None
     for c in ["OneDrive_Direct_Link", "File_URL", "Link"]:
       if c in kpi_list_df.columns:
@@ -142,16 +139,39 @@ else:
         row_data = valid_months[
             valid_months["Month_Label"] == selected_month
         ].iloc[0]
-        file_url = row_data[link_col]
+        file_url = str(row_data[link_col]).strip()
 
         @st.cache_data
         def load_monthly_excel(url):
+          """专门处理 Google Drive 大文件下载及免确认机制的函数"""
           try:
-            if "export=download" not in url and "drive.google.com" in url:
-              url = url.replace("uc?id=", "uc?export=download&id=")
-            res = requests.get(url)
-            return pd.ExcelFile(io.BytesIO(res.content))
+            session = requests.Session()
+
+            # 提取 Google Drive 文件 ID 并重构为标准下载直链
+            if "drive.google.com" in url:
+              if "/file/d/" in url:
+                file_id = url.split("/file/d/")[1].split("/")[0]
+              elif "id=" in url:
+                file_id = url.split("id=")[1].split("&")[0]
+              else:
+                file_id = ""
+
+              if file_id:
+                url = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+            response = session.get(url, stream=True)
+
+            # 检查是否有 Google Drive 的大文件病毒扫描拦截提示
+            for key, value in response.cookies.items():
+              if key.startswith("download_warning"):
+                # 携带 confirm 参数重新请求以跳过网页拦截
+                url = url + "&confirm=" + value
+                response = session.get(url, stream=True)
+                break
+
+            return pd.ExcelFile(io.BytesIO(response.content))
           except Exception as e:
+            st.error(f"Excel download/parsing error detail: {e}")
             return None
 
         with st.spinner(f"Loading KPI data for {selected_month}..."):
@@ -160,7 +180,8 @@ else:
         if excel_file is None:
           st.error(
               f"Failed to download or read the Excel file for {selected_month}."
-              " Please check the link."
+              " Please check that the Google Drive link is set to 'Anyone with"
+              " the link can view'."
           )
         else:
           current_user = st.session_state.username.strip()
