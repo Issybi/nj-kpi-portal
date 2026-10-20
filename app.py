@@ -47,18 +47,20 @@ if "logged_in" not in st.session_state:
   st.session_state.logged_in = False
   st.session_state.username = ""
   st.session_state.role = ""
+  st.session_state.name2 = None
+  st.session_state.name3 = None
+  st.session_state.available_roles = []
 
 # ==================== 登录页面 ====================
 if not st.session_state.logged_in:
   st.title("NJ7 KPI Checking Portal")
-  st.markdown("Please log in with your account, password, and position.")
+  st.markdown("Please log in with your account and password.")
 
   portal_df = load_portal_data()
 
   with st.form("login_form"):
     input_user = st.text_input("Account")
     input_pw = st.text_input("Password", type="password")
-    input_role = st.selectbox("Position", ["scanner", "driver"])
     submit_btn = st.form_submit_button("Login")
 
     if submit_btn:
@@ -69,43 +71,72 @@ if not st.session_state.logged_in:
         )
       else:
         portal_df.columns = portal_df.columns.astype(str).str.strip()
-        matched = False
-        user_row = None
 
+        # 查找该账号匹配的所有行（支持同一个 Account 对应多个 Role 的情况）
+        matched_rows = []
         for idx, row in portal_df.iterrows():
           acc_val = str(row.get("Account", "")).strip()
           pw_val = str(row.get("Password", "")).strip()
-          role_val = str(row.get("Role", "")).strip().lower()
 
-          if (
-              acc_val.lower() == input_user.strip().lower()
-              and str(pw_val) == str(input_pw).strip()
-              and role_val == input_role.strip().lower()
-          ):
-            matched = True
-            user_row = row
-            break
+          if acc_val.lower() == input_user.strip().lower() and str(
+              pw_val
+          ) == str(input_pw).strip():
+            matched_rows.append(row)
 
-        if matched:
+        if matched_rows:
           st.session_state.logged_in = True
-          st.session_state.username = str(user_row.get("Account"))
-          st.session_state.role = input_role.lower()
-          st.session_state.name2 = user_row.get("Name2", None)
-          st.session_state.name3 = user_row.get("Name3", None)
+          st.session_state.username = str(matched_rows[0].get("Account"))
+          st.session_state.name2 = matched_rows[0].get("Name2", None)
+          st.session_state.name3 = matched_rows[0].get("Name3", None)
+
+          # 提取该账号拥有的所有角色列表（转为小写）
+          roles = [
+              str(r.get("Role", "")).strip().lower()
+              for r in matched_rows
+              if str(r.get("Role", "")).strip()
+          ]
+          st.session_state.available_roles = list(set(roles))
+
+          # 如果有多个角色，默认选第一个，后续可以在侧边栏切换
+          if st.session_state.available_roles:
+            st.session_state.role = st.session_state.available_roles[0]
+
           st.rerun()
         else:
-          st.error("Invalid Account, Password, or Position.")
+          st.error("Invalid Account or Password.")
 
 else:
   # ==================== 登录后的 KPI 查询主界面 ====================
   st.sidebar.title("Portal Menu")
   st.sidebar.write(f"**User:** {st.session_state.username}")
-  st.sidebar.write(f"**Position:** {st.session_state.role.capitalize()}")
+
+  # 如果该账号拥有多个职位，在侧边栏提供实时切换 Role 的单选框
+  if len(st.session_state.available_roles) > 1:
+    current_index = 0
+    if st.session_state.role in st.session_state.available_roles:
+      current_index = st.session_state.available_roles.index(
+          st.session_state.role
+      )
+
+    selected_role = st.sidebar.selectbox(
+        "Switch Position (Role)",
+        st.session_state.available_roles,
+        index=current_index,
+        format_func=lambda x: x.capitalize(),
+    )
+    if selected_role != st.session_state.role:
+      st.session_state.role = selected_role
+      st.rerun()
+  else:
+    st.sidebar.write(
+        f"**Position:** {st.session_state.role.capitalize()}"
+    )
 
   if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
     st.session_state.username = ""
     st.session_state.role = ""
+    st.session_state.available_roles = []
     st.rerun()
 
   st.title("Employee KPI Checking Portal")
@@ -119,7 +150,6 @@ else:
         " sheet format."
     )
   else:
-    # 优先检查 C 列的 File_URL
     link_col = None
     for c in ["File_URL", "OneDrive_Direct_Link", "Link"]:
       if c in kpi_list_df.columns:
@@ -144,7 +174,7 @@ else:
 
 
         def load_monthly_excel(url):
-          """下载并解析 Excel 文件（已移除不兼容的 st.cache_data 装饰器）"""
+          """下载并解析 Excel 文件"""
           try:
             if not url.startswith("http"):
               st.error(
