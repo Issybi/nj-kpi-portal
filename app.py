@@ -119,8 +119,9 @@ else:
         " sheet format."
     )
   else:
+    # 强制优先检查 C 列的 File_URL，再向下兼容
     link_col = None
-    for c in ["OneDrive_Direct_Link", "File_URL", "Link"]:
+    for c in ["File_URL", "OneDrive_Direct_Link", "Link"]:
       if c in kpi_list_df.columns:
         link_col = c
         break
@@ -143,11 +144,17 @@ else:
 
         @st.cache_data
         def load_monthly_excel(url):
-          """专门处理 Google Drive 大文件下载及免确认机制的函数"""
+          """专属下载函数：正确处理 Google Drive 直链下载"""
           try:
+            if not url.startswith("http"):
+              st.error(
+                  f"Invalid URL for {selected_month}: '{url}'. Make sure it's"
+                  " a full http link."
+              )
+              return None
+
             session = requests.Session()
 
-            # 提取 Google Drive 文件 ID 并重构为标准下载直链
             if "drive.google.com" in url:
               if "/file/d/" in url:
                 file_id = url.split("/file/d/")[1].split("/")[0]
@@ -161,10 +168,8 @@ else:
 
             response = session.get(url, stream=True)
 
-            # 检查是否有 Google Drive 的大文件病毒扫描拦截提示
             for key, value in response.cookies.items():
               if key.startswith("download_warning"):
-                # 携带 confirm 参数重新请求以跳过网页拦截
                 url = url + "&confirm=" + value
                 response = session.get(url, stream=True)
                 break
