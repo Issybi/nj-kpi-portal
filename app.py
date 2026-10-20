@@ -119,7 +119,7 @@ else:
         " sheet format."
     )
   else:
-    # 强制优先检查 C 列的 File_URL，再向下兼容
+    # 优先检查 C 列的 File_URL
     link_col = None
     for c in ["File_URL", "OneDrive_Direct_Link", "Link"]:
       if c in kpi_list_df.columns:
@@ -142,9 +142,9 @@ else:
         ].iloc[0]
         file_url = str(row_data[link_col]).strip()
 
-        @st.cache_data
+
         def load_monthly_excel(url):
-          """专属下载函数：正确处理 Google Drive 直链下载"""
+          """下载并解析 Excel 文件（已移除不兼容的 st.cache_data 装饰器）"""
           try:
             if not url.startswith("http"):
               st.error(
@@ -178,6 +178,7 @@ else:
           except Exception as e:
             st.error(f"Excel download/parsing error detail: {e}")
             return None
+
 
         with st.spinner(f"Loading KPI data for {selected_month}..."):
           excel_file = load_monthly_excel(file_url)
