@@ -36,28 +36,10 @@ def load_kpi_portal_list():
   try:
     csv_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=KPI"
     df = pd.read_csv(csv_url)
-
-    # 规范化列名，清理多余空格
-    df.columns = [str(c).strip() for c in df.columns]
     return df
   except Exception as e:
     st.error(f"Failed to load 'KPI' sheet list: {e}")
     return pd.DataFrame()
-
-
-@st.cache_data(ttl=0)
-def get_kpi_update_date():
-  """专门读取 'KPI' 分页 E1 单元格的更新日期"""
-  try:
-    csv_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=KPI&range=A1:E2"
-    df_e1 = pd.read_csv(csv_url, header=None)
-    if df_e1.shape[1] >= 5:
-      val = str(df_e1.iloc[0, 4]).strip()
-      if val and val.lower() != "nan":
-        return val
-    return "N/A"
-  except Exception:
-    return "N/A"
 
 
 # 初始化 Session State
@@ -155,26 +137,9 @@ else:
 
   st.title("Employee KPI Checking Portal")
 
-  # 1. 动态展示免责声明与 E1 单元格日期
-  update_date = get_kpi_update_date()
-  st.info(
-      "📌 **Disclaimer & Notice:** Content is for reference only. Please"
-      " confirm your final score with **Amanda** during your KPI review. If"
-      " you find any data inaccuracies, please contact **Isabella** promptly."
-      f" Currently, KPI Data is updated as of **{update_date}**."
-  )
-
-  # 2. 读取 KPI 列表数据
   kpi_list_df = load_kpi_portal_list()
 
-  # 兼容查找 Month_Label 列名
-  month_col = None
-  for col in kpi_list_df.columns:
-    if "month_label" in str(col).lower():
-      month_col = col
-      break
-
-  if kpi_list_df.empty or not month_col:
+  if kpi_list_df.empty or "Month_Label" not in kpi_list_df.columns:
     st.error(
         "Could not load KPI monthly links from the 'KPI' sheet. Please check"
         " sheet format."
@@ -182,18 +147,15 @@ else:
   else:
     link_col = None
     for c in ["File_URL", "OneDrive_Direct_Link", "Link"]:
-      for real_col in kpi_list_df.columns:
-        if c.lower() == str(real_col).lower():
-          link_col = real_col
-          break
-      if link_col:
+      if c in kpi_list_df.columns:
+        link_col = c
         break
 
     if not link_col:
       st.error("Could not find a valid link column in the 'KPI' sheet.")
     else:
       valid_months = kpi_list_df.dropna(subset=[link_col])
-      month_options = valid_months[month_col].dropna().tolist()
+      month_options = valid_months["Month_Label"].dropna().tolist()
 
       if not month_options:
         st.warning("No KPI data files available.")
@@ -201,7 +163,7 @@ else:
         selected_month = st.selectbox("Select Month to View KPI", month_options)
 
         row_data = valid_months[
-            valid_months[month_col] == selected_month
+            valid_months["Month_Label"] == selected_month
         ].iloc[0]
         file_url = str(row_data[link_col]).strip()
 
@@ -280,12 +242,14 @@ else:
                 break
 
             if matched_sheet:
+              # 不设 header 读取整张原始表
               df_raw = pd.read_excel(
                   excel_file, sheet_name=matched_sheet, header=None
               )
 
               st.subheader(f"Scanner KPI Report - {current_user}")
 
+              # 精准寻找包含 'Date' 的那一行作为表头
               header_idx = None
               for idx, row in df_raw.iterrows():
                 row_str_vals = [str(val).strip().lower() for val in row.values]
@@ -296,6 +260,7 @@ else:
               if header_idx is not None:
                 headers = list(df_raw.iloc[header_idx].values)
 
+                # 强制规范化前四列的名称，确保 A(日期)、B(扫描数目)、C(花费时间)、D(分数) 完美对应
                 if len(headers) > 0:
                   headers[0] = "Date"
                 if len(headers) > 1:
@@ -316,20 +281,25 @@ else:
                 df_scan = df_raw.iloc[header_idx + 1 :].copy()
                 df_scan.columns = cleaned_headers
 
+                # 寻找日期列
                 date_col = cleaned_headers[0]
 
+                # 过滤掉日期为空或为 0 的无效行
                 df_scan = df_scan[
                     df_scan[date_col].notna()
                     & (df_scan[date_col].astype(str).str.strip() != "")
                     & (df_scan[date_col].astype(str).str.strip() != "0")
                 ]
 
+                # 最多取前 45 行有效数据
                 if len(df_scan) > 45:
                   df_scan = df_scan.iloc[:45]
 
+                # 精准计算 Score (第4列 / D列) 的平均分
                 score_col = (
                     cleaned_headers[3] if len(cleaned_headers) > 3 else None
                 )
+                # 备用保险：如果第4列名字不对，再按关键词搜索
                 if not score_col or "score" not in score_col.lower():
                   for col in df_scan.columns:
                     if "score" in str(col).strip().lower():
