@@ -42,6 +42,21 @@ def load_kpi_portal_list():
     return pd.DataFrame()
 
 
+@st.cache_data(ttl=0)
+def get_kpi_update_date():
+  """专门从 'KPI' 分页的 H20 单元格读取更新日期"""
+  try:
+    csv_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=KPI&range=H20:H20"
+    df_h20 = pd.read_csv(csv_url, header=None)
+    if not df_h20.empty:
+      val = str(df_h20.iloc[0, 0]).strip()
+      if val and val.lower() != "nan":
+        return val
+    return "N/A"
+  except Exception:
+    return "N/A"
+
+
 # 初始化 Session State
 if "logged_in" not in st.session_state:
   st.session_state.logged_in = False
@@ -136,6 +151,15 @@ else:
     st.rerun()
 
   st.title("Employee KPI Checking Portal")
+
+  # 动态获取 H20 单元格的更新日期并展示免责声明
+  update_date = get_kpi_update_date()
+  st.info(
+      "📌 **Disclaimer & Notice:** Content is for reference only. Please"
+      " confirm your final score with **Amanda** during your KPI review. If"
+      " you find any data inaccuracies, please contact **Isabella** promptly."
+      f" Currently, KPI Data is updated as of **{update_date}**."
+  )
 
   kpi_list_df = load_kpi_portal_list()
 
