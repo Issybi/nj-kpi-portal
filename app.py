@@ -62,6 +62,7 @@ if "logged_in" not in st.session_state:
   st.session_state.logged_in = False
   st.session_state.username = ""
   st.session_state.role = ""
+  st.session_state.is_admin = False
   st.session_state.name2 = None
   st.session_state.name3 = None
   st.session_state.available_roles = []
@@ -100,18 +101,24 @@ if not st.session_state.logged_in:
         if matched_rows:
           st.session_state.logged_in = True
           st.session_state.username = str(matched_rows[0].get("Account"))
-          st.session_state.name2 = matched_rows[0].get("Name2", None)
-          st.session_state.name3 = matched_rows[0].get("Name3", None)
 
           roles = [
               str(r.get("Role", "")).strip().lower()
               for r in matched_rows
               if str(r.get("Role", "")).strip()
           ]
-          st.session_state.available_roles = list(set(roles))
 
-          if st.session_state.available_roles:
-            st.session_state.role = st.session_state.available_roles[0]
+          if "admin" in roles:
+            st.session_state.is_admin = True
+            st.session_state.role = "admin"
+            st.session_state.available_roles = ["admin", "driver", "scanner"]
+          else:
+            st.session_state.is_admin = False
+            st.session_state.name2 = matched_rows[0].get("Name2", None)
+            st.session_state.name3 = matched_rows[0].get("Name3", None)
+            st.session_state.available_roles = list(set(roles))
+            if st.session_state.available_roles:
+              st.session_state.role = st.session_state.available_roles[0]
 
           st.rerun()
         else:
@@ -122,31 +129,41 @@ else:
   st.sidebar.title("Portal Menu")
   st.sidebar.write(f"**User:** {st.session_state.username}")
 
-  if len(st.session_state.available_roles) > 1:
-    current_index = 0
-    if st.session_state.role in st.session_state.available_roles:
-      current_index = st.session_state.available_roles.index(
-          st.session_state.role
-      )
-
-    selected_role = st.sidebar.selectbox(
-        "Switch Position (Role)",
-        st.session_state.available_roles,
-        index=current_index,
-        format_func=lambda x: x.capitalize(),
+  # 如果是管理员主账号，提供专属的切换面板
+  if st.session_state.is_admin:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("👑 Admin Control Panel")
+    admin_view_mode = st.sidebar.selectbox(
+        "Select View Role", ["Scanner", "Driver"]
     )
-    if selected_role != st.session_state.role:
-      st.session_state.role = selected_role
-      st.rerun()
+    st.session_state.role = admin_view_mode.lower()
   else:
-    st.sidebar.write(
-        f"**Position:** {st.session_state.role.capitalize()}"
-    )
+    if len(st.session_state.available_roles) > 1:
+      current_index = 0
+      if st.session_state.role in st.session_state.available_roles:
+        current_index = st.session_state.available_roles.index(
+            st.session_state.role
+        )
+
+      selected_role = st.sidebar.selectbox(
+          "Switch Position (Role)",
+          st.session_state.available_roles,
+          index=current_index,
+          format_func=lambda x: x.capitalize(),
+      )
+      if selected_role != st.session_state.role:
+        st.session_state.role = selected_role
+        st.rerun()
+    else:
+      st.sidebar.write(
+          f"**Position:** {st.session_state.role.capitalize()}"
+      )
 
   if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
     st.session_state.username = ""
     st.session_state.role = ""
+    st.session_state.is_admin = False
     st.session_state.available_roles = []
     st.rerun()
 
@@ -238,23 +255,58 @@ else:
               " the link can view'."
           )
         else:
-          current_user = st.session_state.username.strip()
-          n2 = (
-              str(st.session_state.name2).strip()
-              if pd.notna(st.session_state.name2)
-              else ""
-          )
-          n3 = (
-              str(st.session_state.name3).strip()
-              if pd.notna(st.session_state.name3)
-              else ""
-          )
+          # 如果是管理员，动态从 Excel 中提取所有可用员工名单，并支持搜索过滤
+          if st.session_state.is_admin:
+            st.sidebar.markdown("---")
+            st.sidebar.subheader("👥 Select Employee")
 
-          match_names = [
-              n.lower()
-              for n in [current_user, n2, n3]
-              if n and n.lower() != "nan"
-          ]
+            all_sheets = excel_file.sheet_names
+            if st.session_state.role == "scanner":
+              emp_list = [
+                  s[:-5].strip()
+                  for s in all_sheets
+                  if s.lower().endswith("-scan")
+              ]
+            else:
+              emp_list = [
+                  s.replace("Picking -", "").replace("picking -", "").strip()
+                  for s in all_sheets
+                  if s.lower().startswith("picking -")
+              ]
+
+            if not emp_list:
+              emp_list = ["Default"]
+
+            # 新增：员工搜索输入框
+            search_query = st.sidebar.text_input(
+                "🔍 Search Employee Name", ""
+            ).strip()
+            if search_query:
+              emp_list = [
+                  e for e in emp_list if search_query.lower() in e.lower()
+              ]
+              if not emp_list:
+                emp_list = ["No match found"]
+
+            current_user = st.sidebar.selectbox("Target Employee", emp_list)
+            match_names = [current_user.lower()]
+          else:
+            current_user = st.session_state.username.strip()
+            n2 = (
+                str(st.session_state.name2).strip()
+                if pd.notna(st.session_state.name2)
+                else ""
+            )
+            n3 = (
+                str(st.session_state.name3).strip()
+                if pd.notna(st.session_state.name3)
+                else ""
+            )
+            match_names = [
+                n.lower()
+                for n in [current_user, n2, n3]
+                if n and n.lower() != "nan"
+            ]
 
           # ==================== 角色 1: SCANNER ====================
           if st.session_state.role == "scanner":
@@ -266,14 +318,12 @@ else:
                 break
 
             if matched_sheet:
-              # 不设 header 读取整张原始表
               df_raw = pd.read_excel(
                   excel_file, sheet_name=matched_sheet, header=None
               )
 
               st.subheader(f"Scanner KPI Report - {current_user}")
 
-              # 精准寻找包含 'Date' 的那一行作为表头
               header_idx = None
               for idx, row in df_raw.iterrows():
                 row_str_vals = [str(val).strip().lower() for val in row.values]
@@ -284,7 +334,6 @@ else:
               if header_idx is not None:
                 headers = list(df_raw.iloc[header_idx].values)
 
-                # 强制规范化前四列的名称，确保 A(日期)、B(扫描数目)、C(花费时间)、D(分数) 完美对应
                 if len(headers) > 0:
                   headers[0] = "Date"
                 if len(headers) > 1:
@@ -305,25 +354,20 @@ else:
                 df_scan = df_raw.iloc[header_idx + 1 :].copy()
                 df_scan.columns = cleaned_headers
 
-                # 寻找日期列
                 date_col = cleaned_headers[0]
 
-                # 过滤掉日期为空或为 0 的无效行
                 df_scan = df_scan[
                     df_scan[date_col].notna()
                     & (df_scan[date_col].astype(str).str.strip() != "")
                     & (df_scan[date_col].astype(str).str.strip() != "0")
                 ]
 
-                # 最多取前 45 行有效数据
                 if len(df_scan) > 45:
                   df_scan = df_scan.iloc[:45]
 
-                # 精准计算 Score (第4列 / D列) 的平均分
                 score_col = (
                     cleaned_headers[3] if len(cleaned_headers) > 3 else None
                 )
-                # 备用保险：如果第4列名字不对，再按关键词搜索
                 if not score_col or "score" not in score_col.lower():
                   for col in df_scan.columns:
                     if "score" in str(col).strip().lower():
@@ -348,10 +392,7 @@ else:
                 st.dataframe(df_raw, use_container_width=True)
 
             else:
-              st.warning(
-                  f"No scan records found for your account ({sheet_name} not"
-                  " found)."
-              )
+              st.warning(f"No scan records found for ({sheet_name} not found).")
 
           # ==================== 角色 2: DRIVER ====================
           elif st.session_state.role == "driver":
@@ -392,7 +433,7 @@ else:
                     if not user_summary.empty:
                       st.dataframe(user_summary, use_container_width=True)
                     else:
-                      st.info("No summary record found matching your name.")
+                      st.info("No summary record found matching this name.")
                   else:
                     st.warning("Summary sheet structure mismatch.")
                 else:
@@ -476,7 +517,7 @@ else:
                 df_pick = pd.read_excel(excel_file, sheet_name=picking_sheet)
                 st.dataframe(df_pick, use_container_width=True)
               else:
-                st.warning("No Picking sheet matched for your profile.")
+                st.warning("No Picking sheet matched for this profile.")
 
             with tab5:
               st.subheader("Putaway Details")
@@ -500,4 +541,4 @@ else:
                 df_put = pd.read_excel(excel_file, sheet_name=putaway_sheet)
                 st.dataframe(df_put, use_container_width=True)
               else:
-                st.warning("No Putaway sheet matched for your profile.")
+                st.warning("No Putaway sheet matched for this profile.")
