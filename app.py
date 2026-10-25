@@ -36,6 +36,9 @@ def load_kpi_portal_list():
   try:
     csv_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=KPI"
     df = pd.read_csv(csv_url)
+
+    # 规范化列名，清理多余空格
+    df.columns = [str(c).strip() for c in df.columns]
     return df
   except Exception as e:
     st.error(f"Failed to load 'KPI' sheet list: {e}")
@@ -44,12 +47,10 @@ def load_kpi_portal_list():
 
 @st.cache_data(ttl=0)
 def get_kpi_update_date():
-  """读取 'KPI' 分页 E1 单元格的更新日期"""
+  """专门读取 'KPI' 分页 E1 单元格的更新日期"""
   try:
-    # 只抓取 A1:E2 范围以高效精准获取 E1 单元格
     csv_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=KPI&range=A1:E2"
     df_e1 = pd.read_csv(csv_url, header=None)
-    # E1 单元格在 DataFrame 中的位置为第 0 行第 4 列（索引 0, 4）
     if df_e1.shape[1] >= 5:
       val = str(df_e1.iloc[0, 4]).strip()
       if val and val.lower() != "nan":
@@ -154,10 +155,8 @@ else:
 
   st.title("Employee KPI Checking Portal")
 
-  # 实时获取 E1 单元格的更新日期
+  # 1. 动态展示免责声明与 E1 单元格日期
   update_date = get_kpi_update_date()
-
-  # 展示免责声明信息框
   st.info(
       "📌 **Disclaimer & Notice:** Content is for reference only. Please"
       " confirm your final score with **Amanda** during your KPI review. If"
@@ -165,9 +164,17 @@ else:
       f" Currently, KPI Data is updated as of **{update_date}**."
   )
 
+  # 2. 读取 KPI 列表数据
   kpi_list_df = load_kpi_portal_list()
 
-  if kpi_list_df.empty or "Month_Label" not in kpi_list_df.columns:
+  # 兼容查找 Month_Label 列名
+  month_col = None
+  for col in kpi_list_df.columns:
+    if "month_label" in str(col).lower():
+      month_col = col
+      break
+
+  if kpi_list_df.empty or not month_col:
     st.error(
         "Could not load KPI monthly links from the 'KPI' sheet. Please check"
         " sheet format."
@@ -175,15 +182,18 @@ else:
   else:
     link_col = None
     for c in ["File_URL", "OneDrive_Direct_Link", "Link"]:
-      if c in kpi_list_df.columns:
-        link_col = c
+      for real_col in kpi_list_df.columns:
+        if c.lower() == str(real_col).lower():
+          link_col = real_col
+          break
+      if link_col:
         break
 
     if not link_col:
       st.error("Could not find a valid link column in the 'KPI' sheet.")
     else:
       valid_months = kpi_list_df.dropna(subset=[link_col])
-      month_options = valid_months["Month_Label"].dropna().tolist()
+      month_options = valid_months[month_col].dropna().tolist()
 
       if not month_options:
         st.warning("No KPI data files available.")
@@ -191,7 +201,7 @@ else:
         selected_month = st.selectbox("Select Month to View KPI", month_options)
 
         row_data = valid_months[
-            valid_months["Month_Label"] == selected_month
+            valid_months[month_col] == selected_month
         ].iloc[0]
         file_url = str(row_data[link_col]).strip()
 
