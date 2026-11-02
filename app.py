@@ -277,7 +277,6 @@ else:
             if not emp_list:
               emp_list = ["Default"]
 
-            # 新增：员工搜索输入框
             search_query = st.sidebar.text_input(
                 "🔍 Search Employee Name", ""
             ).strip()
@@ -515,6 +514,18 @@ else:
 
               if picking_sheet:
                 df_pick = pd.read_excel(excel_file, sheet_name=picking_sheet)
+                # 优化过滤：只剔除日期确实为空、None、或纯零的行，保留后面 10/28、10/29 的真实数据
+                if not df_pick.empty:
+                  date_col_pick = df_pick.columns[0]
+                  df_pick = df_pick[
+                      df_pick[date_col_pick].notna()
+                      & (df_pick[date_col_pick].astype(str).str.strip() != "")
+                      & (
+                          df_pick[date_col_pick].astype(str).str.strip().lower()
+                          != "none"
+                      )
+                      & (df_pick[date_col_pick].astype(str).str.strip() != "0")
+                  ]
                 st.dataframe(df_pick, use_container_width=True)
               else:
                 st.warning("No Picking sheet matched for this profile.")
@@ -539,6 +550,18 @@ else:
 
               if putaway_sheet:
                 df_put = pd.read_excel(excel_file, sheet_name=putaway_sheet)
+                # 优化过滤：只剔除日期确实为空、None、或纯零的行，保留后面的真实数据
+                if not df_put.empty:
+                  date_col_put = df_put.columns[0]
+                  df_put = df_put[
+                      df_put[date_col_put].notna()
+                      & (df_put[date_col_put].astype(str).str.strip() != "")
+                      & (
+                          df_put[date_col_put].astype(str).str.strip().lower()
+                          != "none"
+                      )
+                      & (df_put[date_col_put].astype(str).str.strip() != "0")
+                  ]
                 st.dataframe(df_put, use_container_width=True)
               else:
                 st.warning("No Putaway sheet matched for this profile.")
