@@ -355,10 +355,13 @@ else:
 
                 date_col = cleaned_headers[0]
 
+                # 安全转换为字符串后再过滤
+                s_dates = df_scan[date_col].astype(str).str.strip()
                 df_scan = df_scan[
                     df_scan[date_col].notna()
-                    & (df_scan[date_col].astype(str).str.strip() != "")
-                    & (df_scan[date_col].astype(str).str.strip() != "0")
+                    & (s_dates != "")
+                    & (s_dates.str.lower() != "nan")
+                    & (s_dates != "0")
                 ]
 
                 if len(df_scan) > 45:
@@ -435,133 +438,4 @@ else:
                       st.info("No summary record found matching this name.")
                   else:
                     st.warning("Summary sheet structure mismatch.")
-                else:
-                  st.warning("Summary sheet rows are less than 7.")
-              else:
-                st.warning("Summary sheet not found.")
-
-            with tab2:
-              st.subheader("Error & Other Tasks")
-              if "Error-OtherTasks" in excel_file.sheet_names:
-                df_err = pd.read_excel(excel_file, sheet_name="Error-OtherTasks")
-                name_col_err = None
-                for col in df_err.columns:
-                  if "name" in str(col).lower():
-                    name_col_err = col
-                    break
-
-                if name_col_err:
-                  user_err = df_err[
-                      df_err[name_col_err]
-                      .astype(str)
-                      .str.strip()
-                      .str.lower()
-                      .isin(match_names)
-                  ]
-                  if not user_err.empty:
-                    st.dataframe(user_err, use_container_width=True)
-                  else:
-                    st.success("no error")
-                else:
-                  st.success("no error")
-              else:
-                st.success("no error")
-
-            with tab3:
-              st.subheader("Bonus Record")
-              if "Bonus" in excel_file.sheet_names:
-                df_bonus = pd.read_excel(excel_file, sheet_name="Bonus")
-                name_col_bon = None
-                for col in df_bonus.columns:
-                  if "name" in str(col).lower():
-                    name_col_bon = col
-                    break
-
-                if name_col_bon:
-                  user_bon = df_bonus[
-                      df_bonus[name_col_bon]
-                      .astype(str)
-                      .str.strip()
-                      .str.lower()
-                      .isin(match_names)
-                  ]
-                  if not user_bon.empty:
-                    st.dataframe(user_bon, use_container_width=True)
-                  else:
-                    st.info("no bonus")
-                else:
-                  st.info("no bonus")
-              else:
-                st.info("no bonus")
-
-            with tab4:
-              st.subheader("Picking Details")
-              picking_sheet = None
-              for s in excel_file.sheet_names:
-                if s.lower().startswith("picking -"):
-                  try:
-                    temp_df = pd.read_excel(
-                        excel_file, sheet_name=s, header=None
-                    )
-                    b1_val = str(temp_df.iloc[0, 1]).strip().lower()
-                    if b1_val in match_names or any(
-                        m in b1_val for m in match_names
-                    ):
-                      picking_sheet = s
-                      break
-                  except:
-                    continue
-
-              if picking_sheet:
-                df_pick = pd.read_excel(excel_file, sheet_name=picking_sheet)
-                # 优化过滤：只剔除日期确实为空、None、或纯零的行，保留后面 10/28、10/29 的真实数据
-                if not df_pick.empty:
-                  date_col_pick = df_pick.columns[0]
-                  df_pick = df_pick[
-                      df_pick[date_col_pick].notna()
-                      & (df_pick[date_col_pick].astype(str).str.strip() != "")
-                      & (
-                          df_pick[date_col_pick].astype(str).str.strip().lower()
-                          != "none"
-                      )
-                      & (df_pick[date_col_pick].astype(str).str.strip() != "0")
-                  ]
-                st.dataframe(df_pick, use_container_width=True)
-              else:
-                st.warning("No Picking sheet matched for this profile.")
-
-            with tab5:
-              st.subheader("Putaway Details")
-              putaway_sheet = None
-              for s in excel_file.sheet_names:
-                if s.lower().startswith("putaway -"):
-                  try:
-                    temp_df = pd.read_excel(
-                        excel_file, sheet_name=s, header=None
-                    )
-                    b1_val = str(temp_df.iloc[0, 1]).strip().lower()
-                    if b1_val in match_names or any(
-                        m in b1_val for m in match_names
-                    ):
-                      putaway_sheet = s
-                      break
-                  except:
-                    continue
-
-              if putaway_sheet:
-                df_put = pd.read_excel(excel_file, sheet_name=putaway_sheet)
-                # 优化过滤：只剔除日期确实为空、None、或纯零的行，保留后面的真实数据
-                if not df_put.empty:
-                  date_col_put = df_put.columns[0]
-                  df_put = df_put[
-                      df_put[date_col_put].notna()
-                      & (df_put[date_col_put].astype(str).str.strip() != "")
-                      & (
-                          df_put[date_col_put].astype(str).str.strip().lower()
-                          != "none"
-                      )
-                      & (df_put[date_col_put].astype(str).str.strip() != "0")
-                  ]
-                st.dataframe(df_put, use_container_width=True)
-              else:
-                st.warning("No Putaway sheet matched for this profile.")
+                else
