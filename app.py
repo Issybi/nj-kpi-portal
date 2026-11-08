@@ -433,7 +433,7 @@ else:
                         .isin(match_names)
                     ]
                     if not user_summary.empty:
-                      st.dataframe(user_summary, use_container_width=True)
+  st.dataframe(user_summary.astype(object).where(pd.notnull(user_summary), ""), use_container_width=True)
                     else:
                       st.info("No summary record found matching this name.")
                   else:
