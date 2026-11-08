@@ -133,10 +133,6 @@ else:
   if st.session_state.is_admin:
     st.sidebar.markdown("---")
     st.sidebar.subheader("👑 Admin Control Panel")
-    admin_view_mode = st.sidebar.selectbox(
-        "Select View Role", ["Scanner", "Driver"]
-    )
-    st.session_state.role = admin_view_mode.lower()
   else:
     if len(st.session_state.available_roles) > 1:
       current_index = 0
@@ -261,18 +257,19 @@ else:
             st.sidebar.subheader("👥 Select Employee")
 
             all_sheets = excel_file.sheet_names
-            if st.session_state.role == "scanner":
-              emp_list = [
-                  s[:-5].strip()
-                  for s in all_sheets
-                  if s.lower().endswith("-scan")
-              ]
-            else:
-              emp_list = [
-                  s.replace("Picking -", "").replace("picking -", "").strip()
-                  for s in all_sheets
-                  if s.lower().startswith("picking -")
-              ]
+            driver_list = [
+                s.replace("Picking -", "").replace("picking -", "").strip()
+                for s in all_sheets
+                if s.lower().startswith("picking -")
+            ]
+            scanner_list = [
+                s.strip()[:-5].strip()
+                for s in all_sheets
+                if s.strip().lower().endswith("-scan")
+            ]
+            emp_list = driver_list + [
+                e for e in scanner_list if e not in driver_list
+            ]
 
             if not emp_list:
               emp_list = ["Default"]
@@ -289,6 +286,10 @@ else:
 
             current_user = st.sidebar.selectbox("Target Employee", emp_list)
             match_names = [current_user.lower()]
+            if current_user in driver_list:
+              st.session_state.role = "driver"
+            elif current_user in scanner_list:
+              st.session_state.role = "scanner"
           else:
             current_user = st.session_state.username.strip()
             n2 = (
@@ -433,7 +434,9 @@ else:
                         .isin(match_names)
                     ]
                     if not user_summary.empty:
-                      st.dataframe(user_summary.astype(object).where(pd.notnull(user_summary), ""), use_container_width=True)
+                      user_summary = user_summary.astype(object).where(pd.notnull(user_summary), "")
+                      user_summary.columns = ["" if pd.isna(c) else c for c in user_summary.columns]
+                      st.dataframe(user_summary, use_container_width=True)
                     else:
                       st.info("No summary record found matching this name.")
                   else:
